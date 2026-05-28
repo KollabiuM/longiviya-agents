@@ -2,7 +2,7 @@
 
 All notable changes to Claude Office Visualizer are documented here.
 
-## [Unreleased]
+## [0.17.0] - 2026-05-28
 
 ### Security
 
