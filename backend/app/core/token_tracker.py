@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from app.core.path_utils import is_safe_transcript_path
 from app.models.events import Event
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,11 @@ logger = logging.getLogger(__name__)
 # 50 KB is needed to scan for thinking blocks (larger payloads).
 _TOKEN_READ_SIZE = 20_000
 _THINKING_READ_SIZE = 50_000
+
+# Files larger than this are skipped to bound memory use when the whole
+# file is read (count_tool_uses_from_jsonl). Generous enough for very long
+# real sessions while preventing a pathological transcript from exhausting RAM.
+_MAX_TRANSCRIPT_BYTES = 50_000_000
 
 # Model family → max context window (tokens).
 # Any model not in this map falls back to 200k.
@@ -110,6 +116,30 @@ class TokenTracker:
             f"({self.total_tokens:,}/{self.max_context_tokens:,} tokens)"
         )
 
+    def _prepare_transcript_path(self, transcript_path: str) -> Path | None:
+        """Translate, confine, and existence-check a transcript path.
+
+        Mirrors the contract used by ``jsonl_parser`` and ``transcript_poller``:
+        host→container translation for Docker deployments, confinement to
+        ``~/.claude/`` with a ``.jsonl`` extension, and a size cap to bound
+        memory use. Returns the resolved path, or ``None`` if it is unsafe,
+        missing, or too large.
+        """
+        from app.config import get_settings  # local import to avoid cycles
+
+        translated = get_settings().translate_path(transcript_path)
+        if not is_safe_transcript_path(translated):
+            logger.warning("Rejected transcript path outside ~/.claude/: %s", translated)
+            return None
+
+        path = Path(translated).expanduser()
+        if not path.exists():
+            return None
+        if path.stat().st_size > _MAX_TRANSCRIPT_BYTES:
+            logger.warning("Transcript exceeds %d bytes, skipping: %s", _MAX_TRANSCRIPT_BYTES, path)
+            return None
+        return path
+
     def count_tool_uses_from_jsonl(self, transcript_path: str) -> int:
         """Count tool_use blocks in a JSONL transcript file.
 
@@ -119,11 +149,11 @@ class TokenTracker:
         Returns:
             Number of ``"type": "tool_use"`` entries found.
         """
-        try:
-            path = Path(transcript_path).expanduser()
-            if not path.exists():
-                return 0
+        path = self._prepare_transcript_path(transcript_path)
+        if path is None:
+            return 0
 
+        try:
             with open(path, encoding="utf-8", errors="ignore") as f:
                 content = f.read()
 
@@ -131,8 +161,8 @@ class TokenTracker:
             count += content.count('"type": "tool_use"')
             return count
 
-        except Exception:
-            logger.debug("Failed to count tool uses in %s", transcript_path, exc_info=True)
+        except (OSError, ValueError) as exc:
+            logger.warning("Failed to count tool uses in %s: %s", transcript_path, exc)
             return 0
 
     def extract_thinking_from_jsonl(
@@ -147,11 +177,11 @@ class TokenTracker:
         Returns:
             The latest thinking text, or None if not found.
         """
-        try:
-            path = Path(transcript_path).expanduser()
-            if not path.exists():
-                return None
+        path = self._prepare_transcript_path(transcript_path)
+        if path is None:
+            return None
 
+        try:
             with open(path, "rb") as f:
                 f.seek(0, 2)  # Go to end
                 file_size = f.tell()
@@ -194,8 +224,8 @@ class TokenTracker:
                     latest_thinking = latest_thinking[: max_length - 3] + "..."
                 return latest_thinking
 
-        except Exception:
-            logger.debug("Failed to extract thinking from %s", transcript_path, exc_info=True)
+        except (OSError, ValueError) as exc:
+            logger.warning("Failed to extract thinking from %s: %s", transcript_path, exc)
 
         return None
 
@@ -215,11 +245,11 @@ class TokenTracker:
         Returns:
             Dict with ``input_tokens``, ``output_tokens``, and optionally ``model``.
         """
-        try:
-            path = Path(transcript_path).expanduser()
-            if not path.exists():
-                return None
+        path = self._prepare_transcript_path(transcript_path)
+        if path is None:
+            return None
 
+        try:
             with open(path, "rb") as f:
                 f.seek(0, 2)  # Go to end
                 file_size = f.tell()
@@ -255,7 +285,7 @@ class TokenTracker:
                 except (json.JSONDecodeError, KeyError):
                     continue
 
-        except Exception:
-            logger.debug("Failed to extract token usage from %s", transcript_path, exc_info=True)
+        except (OSError, ValueError) as exc:
+            logger.warning("Failed to extract token usage from %s: %s", transcript_path, exc)
 
         return None

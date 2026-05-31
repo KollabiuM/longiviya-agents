@@ -2,6 +2,23 @@
 
 All notable changes to Claude Office Visualizer are documented here.
 
+## [Unreleased]
+
+### Security
+
+- **Transcript path validation gap**: `token_tracker.py` bypassed the `is_safe_transcript_path()` validator added in 0.17.0 — its three JSONL readers opened an attacker-controlled `transcript_path` from event data with no confinement check, reachable from the unauthenticated `/events` endpoint. All three now translate, validate, and size-cap the path via a shared helper (#39)
+- **Memory-exhaustion guard**: transcript reads are now capped at 50 MB to prevent a pathological file from being read into memory (#39)
+
+### Fixed
+
+- **`/docs` and `/redoc` broke when `CLAUDE_OFFICE_API_KEY` was set**: the auth exemption listed `/openapi.json`, but the schema is served at `/api/v1/openapi.json`, so the docs pages 401'd on schema load. The exemption now matches the real schema URL and includes `/redoc` (#39)
+- **`token_tracker` Docker path translation**: token/tool-count/thinking extraction now applies `translate_path()` like the other transcript readers, so it works under `CLAUDE_PATH_HOST`/`CLAUDE_PATH_CONTAINER` deployments instead of silently reading nothing (#39)
+- **Silent extraction failures**: transcript-read errors in `token_tracker` now log at `warning` (narrowed to `OSError`/`ValueError`) instead of being swallowed at `debug`; the room WebSocket logs unexpected errors instead of discarding them; the hook's `send_event` now records backend failures to the debug log it documents (#39)
+
+### Changed
+
+- **Dead code removal**: removed the backend-only unused `get_session_messages()` (jsonl_parser) and `get_random_work_acceptance_quote()` + `WORK_ACCEPTANCE_QUOTES` (quotes; the live copy lives in the frontend), plus their tests (#39)
+
 ## [0.17.0] - 2026-05-28
 
 ### Security

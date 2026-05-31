@@ -265,3 +265,98 @@ class TestWebSocketOriginValidation:
             assert validate_websocket_origin(ws) is False
         finally:
             settings.CLAUDE_OFFICE_API_KEY = original
+
+
+# ---------------------------------------------------------------------------
+# Follow-up (issue #39): token_tracker must honor is_safe_transcript_path,
+# and the OpenAPI schema URL must stay reachable when an API key is set.
+# ---------------------------------------------------------------------------
+
+
+class TestTokenTrackerPathConfinement:
+    """token_tracker must refuse to read paths outside ~/.claude/ (issue #39)."""
+
+    def test_count_tool_uses_rejects_outside_path(self) -> None:
+        from app.core.token_tracker import TokenTracker
+
+        # Neither .jsonl nor under ~/.claude — must be rejected, not read.
+        assert TokenTracker().count_tool_uses_from_jsonl("/etc/passwd") == 0
+
+    def test_token_usage_slow_path_rejects_outside_path(self) -> None:
+        """update_from_event's JSONL fallback must not read an out-of-confine path."""
+        from app.core.token_tracker import TokenTracker
+        from app.models.events import Event, EventData, EventType
+
+        tracker = TokenTracker()
+        event = Event(
+            event_type=EventType.STOP,
+            session_id="test",
+            data=EventData(transcript_path="/etc/hostname"),
+        )
+        tracker.update_from_event(event)
+        assert tracker.total_input_tokens == 0
+        assert tracker.total_output_tokens == 0
+
+    def test_extract_thinking_rejects_outside_path(self) -> None:
+        from app.core.token_tracker import TokenTracker
+
+        assert TokenTracker().extract_thinking_from_jsonl("/etc/hostname") is None
+
+    def test_valid_in_confine_transcript_is_counted(self, tmp_path: Path) -> None:
+        """A well-formed transcript under ~/.claude/ is still parsed normally."""
+        from app.core.token_tracker import TokenTracker
+
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        f = claude_dir / "session.jsonl"
+        f.write_text('{"type":"tool_use"}\n{"type": "tool_use"}\n')
+
+        with patch.object(Path, "home", return_value=tmp_path):
+            assert TokenTracker().count_tool_uses_from_jsonl(str(f)) == 2
+
+    def test_oversized_transcript_is_skipped(self, tmp_path: Path) -> None:
+        """A transcript larger than the cap is skipped, not read into memory."""
+        import app.core.token_tracker as tt
+
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        big = claude_dir / "huge.jsonl"
+        big.write_text('{"type": "tool_use"}\n' * 100)
+
+        with (
+            patch.object(Path, "home", return_value=tmp_path),
+            patch.object(tt, "_MAX_TRANSCRIPT_BYTES", 10),
+        ):
+            assert tt.TokenTracker().count_tool_uses_from_jsonl(str(big)) == 0
+
+
+class TestOpenApiAuthExemption:
+    """OpenAPI docs must stay reachable when an API key is configured (issue #39)."""
+
+    def test_openapi_schema_reachable_with_key(self) -> None:
+        from app.config import get_settings
+        from app.main import app
+
+        settings = get_settings()
+        original = settings.CLAUDE_OFFICE_API_KEY
+        settings.CLAUDE_OFFICE_API_KEY = "test-secret-key"
+        try:
+            client = TestClient(app)
+            resp = client.get(f"{settings.API_V1_STR}/openapi.json")
+            assert resp.status_code == 200
+        finally:
+            settings.CLAUDE_OFFICE_API_KEY = original
+
+    def test_docs_page_reachable_with_key(self) -> None:
+        from app.config import get_settings
+        from app.main import app
+
+        settings = get_settings()
+        original = settings.CLAUDE_OFFICE_API_KEY
+        settings.CLAUDE_OFFICE_API_KEY = "test-secret-key"
+        try:
+            client = TestClient(app)
+            resp = client.get("/docs")
+            assert resp.status_code == 200
+        finally:
+            settings.CLAUDE_OFFICE_API_KEY = original

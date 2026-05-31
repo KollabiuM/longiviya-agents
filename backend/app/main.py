@@ -54,8 +54,10 @@ class LocalhostOnlyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-# Paths that do NOT require an API key (health checks, static assets, etc.)
-_NO_AUTH_PATHS = frozenset({"/health", "/docs", "/openapi.json"})
+# Paths that do NOT require an API key (health checks, interactive docs).
+# The OpenAPI schema URL is checked separately in the middleware because it is
+# served under settings.API_V1_STR (e.g. /api/v1/openapi.json), not /openapi.json.
+_NO_AUTH_PATHS = frozenset({"/health", "/docs", "/redoc"})
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
@@ -69,7 +71,11 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if not key:
             return await call_next(request)
 
-        if request.url.path in _NO_AUTH_PATHS or request.url.path.startswith("/ws/"):
+        if (
+            request.url.path in _NO_AUTH_PATHS
+            or request.url.path == f"{settings.API_V1_STR}/openapi.json"
+            or request.url.path.startswith("/ws/")
+        ):
             return await call_next(request)
 
         provided = request.headers.get("X-API-Key", "")
@@ -82,6 +88,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 logging.basicConfig(
     level=logging.INFO, format="%(message)s", handlers=[RichHandler(rich_tracebacks=True)]
 )
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -153,7 +160,7 @@ async def _reap_stale_sessions() -> None:
             .execution_options(synchronize_session="fetch")
         )
         await db.commit()
-        count = int(str(getattr(result, "rowcount", 0)))
+        count = getattr(result, "rowcount", 0) or 0
         if count > 0:
             reap_logger.info("Reaped %d stale sessions (inactive >48h)", count)
 
@@ -276,8 +283,10 @@ async def websocket_room(websocket: WebSocket, room_id: str) -> None:
         # Keep alive -- discard incoming messages
         while True:
             await websocket.receive_text()
-    except Exception:
+    except WebSocketDisconnect:
         pass
+    except Exception:
+        logger.warning("Room WebSocket error for %s", room_id, exc_info=True)
     finally:
         await manager.disconnect_room(websocket, room_id)
 

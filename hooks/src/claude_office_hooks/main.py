@@ -53,9 +53,10 @@ try:
             req = urllib.request.Request(API_URL, data=json_data, headers=headers)
             with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
                 if response.status >= 300:
-                    pass  # Silently fail — never disrupt the user
-        except Exception:
-            pass
+                    debug_log(f"send_event: backend returned HTTP {response.status}")
+        except Exception as exc:
+            # Record the failure but never disrupt the user (always swallow).
+            log_error(exc, "send_event failed")
 
     def main() -> None:
         """Parse arguments, read stdin, map the event, and POST to backend."""

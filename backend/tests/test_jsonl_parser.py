@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.core.jsonl_parser import get_last_assistant_response, get_session_messages
+from app.core.jsonl_parser import get_last_assistant_response
 
 
 class TestGetLastAssistantResponse:
@@ -61,36 +61,3 @@ class TestGetLastAssistantResponse:
         jsonl_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         result = get_last_assistant_response(jsonl_path)
         assert result == "Text response"
-
-
-class TestGetSessionMessages:
-    """Tests for get_session_messages function."""
-
-    def test_returns_all_assistant_messages(self, sample_jsonl_file: Path) -> None:
-        """Should return all assistant text messages."""
-        result = get_session_messages(sample_jsonl_file)
-        # Should have 3 text messages (skips tool_use only)
-        texts = [m["text"] for m in result]
-        assert "First response" in texts
-        assert "Second response" in texts
-        assert "Final response with text" in texts
-
-    def test_nonexistent_file_returns_empty(self, temp_dir: Path) -> None:
-        """Nonexistent file should return empty list."""
-        result = get_session_messages(temp_dir / "nonexistent.jsonl")
-        assert result == []
-
-    def test_empty_file_returns_empty(self, temp_dir: Path) -> None:
-        """Empty file should return empty list."""
-        empty_file = temp_dir / "empty.jsonl"
-        empty_file.write_text("", encoding="utf-8")
-        result = get_session_messages(empty_file)
-        assert result == []
-
-    def test_message_structure(self, sample_jsonl_file: Path) -> None:
-        """Each message should have role and text keys."""
-        result = get_session_messages(sample_jsonl_file)
-        for msg in result:
-            assert "role" in msg
-            assert "text" in msg
-            assert msg["role"] == "assistant"
