@@ -43,6 +43,13 @@ The application was built with [Next.js](https://nextjs.org/), [PixiJS](https://
 
 ## What's New
 
+### v0.22.0 (June 2026)
+
+- **Schedule editor cron helpers**: New pure `src/utils/cron.ts` utilities that round-trip between a friendly schedule editor and 5-field cron expressions (`timesToCron`, `intervalToCron`, `cronToEditor`)
+- **Bug fixes**: Attention toast dismiss glyph rendered as raw source text instead of ✕ (#54), a Windows hook crash caused by a conflicting system OpenSSL, and dropped proxy/redirect support for remote `http://` backends (#53)
+
+For the full release history, see [CHANGELOG.md](CHANGELOG.md).
+
 ### v0.21.0 (June 2026)
 
 - **Dependency refresh**: All packages across backend, frontend, hooks, and the OpenCode plugin bumped to latest (FastAPI 0.137, Starlette 1.3, Next 16.2.9, React 19.2.7, pixi.js 8.19, and tooling) — supersedes dependabot PRs #47/#50

@@ -33,7 +33,7 @@ try:
     from claude_office_hooks.debug_logger import debug_log
     from claude_office_hooks.event_mapper import map_event
 
-    __version__ = "0.21.0"
+    __version__ = "0.22.0"
 
     # Load config at module init so DEBUG flag is available immediately
     _config = load_config()
