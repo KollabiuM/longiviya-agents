@@ -8,6 +8,10 @@ All notable changes to Claude Office Visualizer are documented here.
 
 - **Schedule-editor cron helpers (frontend)**: new `src/utils/cron.ts` with pure functions that round-trip between a friendly schedule editor and a 5-field cron expression — `timesToCron` (fixed daily times → cron), `intervalToCron` (every-N-minutes within an hour window → cron), and `cronToEditor` (parse cron back into editor state, falling back to a raw-mode escape hatch), plus `DEFAULT_BUSINESS_HOURS` (8–23) and `enterTimesHours`. Zero dependencies, 12 vitest cases. Mined from PR #51, whose companion `pathfinding.ts` was rejected because the existing `systems/astar.ts` is strictly superior (binary heap, 8-directional)
 
+### Fixed
+
+- **Hook crash on Windows with a conflicting system OpenSSL (`OPENSSL_Uplink: no OPENSSL_Applink`)**: `send_event` posts only to the local backend over plain HTTP, but Python 3.14's `urllib.request.urlopen` builds an SSL-capable opener (an `HTTPSHandler` whose context is created eagerly). On machines where a foreign OpenSSL config/cert is in play (e.g. `SSL_CERT_FILE`/`SSL_CERT_DIR` set by another install, or a `libcrypto` in `System32`), creating that context aborts the whole process at the C level — so no event was ever sent and the office stayed empty. The hook now builds an `OpenerDirector` with only `HTTPHandler` for `http://` URLs (no SSL context, no crash) and keeps the standard SSL-capable opener for `https://` backends, so remote deployments are unaffected
+
 ## [0.21.0] - 2026-06-17
 
 ### Changed
