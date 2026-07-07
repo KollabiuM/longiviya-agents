@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = f"sqlite+aiosqlite:///{_DEFAULT_DB_PATH}"
     GIT_POLL_INTERVAL: int = 5
 
+    # Max events accepted per session_id per 60s sliding window (ARC-016).
+    # Keyed per-session so one busy Claude Code session cannot starve another;
+    # the previous global 300/60s default throttled the wrong dimension.
+    EVENT_RATE_LIMIT: int = 1000
+
     CLAUDE_CODE_OAUTH_TOKEN: str = ""
     SUMMARY_MODEL: str = "claude-haiku-4-5-20251001"
     SUMMARY_ENABLED: bool = True

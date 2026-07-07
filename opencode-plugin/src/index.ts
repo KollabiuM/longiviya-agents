@@ -24,6 +24,7 @@ import type {
   AssistantMessage,
   Permission,
 } from "@opencode-ai/sdk";
+import { SessionTracker } from "./sessionTracker";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -92,7 +93,7 @@ interface EventData {
   task_list_id?: string;
 }
 
-interface BackendEvent {
+export interface BackendEvent {
   event_type: EventType;
   session_id: string;
   timestamp: string;
@@ -178,56 +179,21 @@ async function sendEvent(event: BackendEvent): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Track which sessions we've already sent session_start for, to avoid
- * duplicate start events (OpenCode fires session.created for every session
- * at startup, including old ones).
- */
-const activeSessions = new Set<string>();
-
-/**
- * Track child session ID -> parent session ID for @mention subagent sessions.
- * When OpenCode creates a child session via @agent mention, it has a parentID.
- * We emit subagent_start on the parent and subagent_stop when the child ends.
- */
-const childToParent = new Map<string, string>();
-
-/**
- * Track child session ID -> agent name for @mention subagent sessions.
- */
-const childToAgent = new Map<string, string>();
-
-/**
- * Track pending task tool calls: parentSessionId -> Set<callID>.
- * When tool.execute.before fires for a task/agent tool, we store the callID.
- * When session.created fires for a child session with a parentID, if that
- * parent has pending task calls, we know the child session corresponds to
- * one of those tool calls — suppress the duplicate subagent_start and link
- * the child session to the tool call for stop deduplication.
+ * Session-tracking state moved into an injectable, unit-tested class.
  *
- * Note: we can't match a specific callID to a specific child session (OpenCode
- * doesn't expose this mapping), but since tool calls are sequential within a
- * session, we pop the oldest pending call when a child session appears.
+ * The 7 Map/Set structures that used to live at module scope (activeSessions,
+ * childToParent, childToAgent, pendingTaskCalls, childSessionToCallId,
+ * childSessionToParent, childStopped) plus the order-dependent session-linking
+ * heuristics now live on `SessionTracker`. The transport is constructor-
+ * injected so tests can characterize the heuristics without the real fetch
+ * path; see `tests/sessionTracker.test.ts`.
+ *
+ * The instance is kept at module scope (matching the prior lifetime of the
+ * 7 structures): it must survive across plugin factory invocations so that
+ * pending-callID FIFOs and child-session linkage persist for the process
+ * lifetime.
  */
-const pendingTaskCalls = new Map<string, string[]>(); // parentId -> callID[]
-
-/**
- * Track child session ID -> tool callID for task-tool-spawned child sessions.
- * These children should NOT emit separate subagent_start/stop since the
- * tool.execute.before/after hooks already handle those events.
- */
-const childSessionToCallId = new Map<string, string>();
-
-/**
- * Track child session ID -> parent session ID for task-tool-spawned children.
- * Needed for agent_update events when session.updated fires with a real title.
- */
-const childSessionToParent = new Map<string, string>();
-
-/**
- * Track which child sessions have already had subagent_stop emitted, to
- * prevent double-stop from both session.idle AND session.deleted firing.
- */
-const childStopped = new Set<string>();
+const tracker = new SessionTracker(sendEvent);
 
 // ---------------------------------------------------------------------------
 // Plugin entry point
@@ -348,28 +314,21 @@ const plugin: Plugin = async (ctx: PluginInput): Promise<Hooks> => {
 
         case "session.created": {
           const session = event.properties.info as Session;
-          if (!activeSessions.has(session.id)) {
-            activeSessions.add(session.id);
+          if (!tracker.isSessionActive(session.id)) {
+            tracker.markSessionActive(session.id);
             const parentID = (session as unknown as { parentID?: string }).parentID;
             if (parentID) {
               // Child session — check if it was spawned by a task tool call.
-              // task tool calls register pending callIDs before their child session appears.
-              const pendingCalls = pendingTaskCalls.get(parentID);
-              if (pendingCalls && pendingCalls.length > 0) {
-                // This child session corresponds to the oldest pending task call.
+              // Task tool calls register pending callIDs before their child
+              // session appears; linkChildSession FIFO-shifts the oldest.
+              const linked = tracker.linkChildSession(session.id, parentID);
+              if (linked) {
                 // Suppress duplicate subagent_start — tool.execute.before already fired it.
-                const callId = pendingCalls.shift()!;
-                if (pendingCalls.length === 0) {
-                  pendingTaskCalls.delete(parentID);
-                }
-                childSessionToCallId.set(session.id, callId);
-                childSessionToParent.set(session.id, parentID);
-                debug("Child session", session.id, "linked to task callID", callId, "- suppressing duplicate start");
+                debug("Child session", session.id, "linked to task callID", linked.callID, "- suppressing duplicate start");
               } else {
                 // No pending task call — this is a true @mention subagent session.
                 const agentName = (session as unknown as { agent?: string }).agent ?? "subagent";
-                childToParent.set(session.id, parentID);
-                childToAgent.set(session.id, agentName);
+                tracker.registerMentionChild(session.id, parentID, agentName);
                 await sendEvent(
                   makeEvent("subagent_start", parentID, {
                     agent_id: `subagent_${session.id}`,
@@ -393,25 +352,22 @@ const plugin: Plugin = async (ctx: PluginInput): Promise<Hooks> => {
 
         case "session.deleted": {
           const session = event.properties.info as Session;
-          activeSessions.delete(session.id);
+          tracker.clearActiveSession(session.id);
 
-          if (childSessionToCallId.has(session.id)) {
+          if (tracker.isTaskToolChild(session.id)) {
             // Task-tool-spawned child — tool.execute.after already handles subagent_stop.
             // Just clean up our tracking maps.
-            childSessionToCallId.delete(session.id);
-            childSessionToParent.delete(session.id);
-            childStopped.delete(session.id);
+            tracker.clearTaskToolChildMaps(session.id);
+            tracker.clearChildStopped(session.id);
             debug("Child session", session.id, "deleted (task-tool-spawned) — stop handled by tool.execute.after");
           } else {
-            const parentID = childToParent.get(session.id);
+            const parentID = tracker.getMentionChildParent(session.id);
             if (parentID) {
               // @mention child session deleted — clean up tracking maps.
-              const agentName = childToAgent.get(session.id) ?? "subagent";
-              childToParent.delete(session.id);
-              childToAgent.delete(session.id);
+              const agentName = tracker.getMentionChildAgent(session.id) ?? "subagent";
+              tracker.clearMentionChildMaps(session.id);
               // Only emit subagent_stop if we haven't already (session.idle fires first usually)
-              if (!childStopped.has(session.id)) {
-                childStopped.add(session.id);
+              if (tracker.markChildStopped(session.id)) {
                 await sendEvent(
                   makeEvent("subagent_stop", parentID, {
                     agent_id: `subagent_${session.id}`,
@@ -425,7 +381,7 @@ const plugin: Plugin = async (ctx: PluginInput): Promise<Hooks> => {
               // session.deleted is terminal for this child — drop its marker so
               // the childStopped Set doesn't grow unbounded over the process
               // lifetime (the marker only needs to survive the idle→deleted gap).
-              childStopped.delete(session.id);
+              tracker.clearChildStopped(session.id);
             } else {
               await sendEvent(
                 makeEvent("session_end", session.id, {
@@ -440,16 +396,15 @@ const plugin: Plugin = async (ctx: PluginInput): Promise<Hooks> => {
         case "session.idle": {
           const { sessionID } = event.properties;
 
-          if (childSessionToCallId.has(sessionID)) {
+          if (tracker.isTaskToolChild(sessionID)) {
             // Task-tool-spawned child went idle — tool.execute.after handles it.
             debug("Child session", sessionID, "idle (task-tool-spawned) — stop handled by tool.execute.after");
           } else {
-            const parentID = childToParent.get(sessionID);
+            const parentID = tracker.getMentionChildParent(sessionID);
             if (parentID) {
               // @mention child session went idle — emit subagent_stop on parent.
-              const agentName = childToAgent.get(sessionID) ?? "subagent";
-              if (!childStopped.has(sessionID)) {
-                childStopped.add(sessionID);
+              const agentName = tracker.getMentionChildAgent(sessionID) ?? "subagent";
+              if (tracker.markChildStopped(sessionID)) {
                 await sendEvent(
                   makeEvent("subagent_stop", parentID, {
                     agent_id: `subagent_${sessionID}`,
@@ -481,11 +436,11 @@ const plugin: Plugin = async (ctx: PluginInput): Promise<Hooks> => {
           const title = updatedSession.title?.trim();
           if (!title) break;
 
-          if (childSessionToCallId.has(updatedSession.id)) {
+          if (tracker.isTaskToolChild(updatedSession.id)) {
             // Task-tool-spawned child — update agent name via agent_update event
             // targeted at the parent session, keyed by callID.
-            const parentID = childSessionToParent.get(updatedSession.id);
-            const callId = childSessionToCallId.get(updatedSession.id)!;
+            const parentID = tracker.getTaskToolChildParent(updatedSession.id);
+            const callId = tracker.getTaskToolChildCallId(updatedSession.id) as string;
             if (parentID && title) {
               debug("Updating task-agent name:", callId, "->", title);
               await sendEvent(
@@ -496,10 +451,10 @@ const plugin: Plugin = async (ctx: PluginInput): Promise<Hooks> => {
                 })
               );
             }
-          } else if (childToParent.has(updatedSession.id)) {
+          } else if (tracker.hasMentionChild(updatedSession.id)) {
             // @mention child session — update agent name map
-            if (title !== childToAgent.get(updatedSession.id)) {
-              childToAgent.set(updatedSession.id, title);
+            if (title !== tracker.getMentionChildAgent(updatedSession.id)) {
+              tracker.setMentionChildAgent(updatedSession.id, title);
               debug("Updated @mention agent name from session.updated:", title);
             }
           }
@@ -602,9 +557,7 @@ const plugin: Plugin = async (ctx: PluginInput): Promise<Hooks> => {
         // When session.created fires for the child session, it will find this
         // and link the child session to this callID instead of emitting a
         // duplicate subagent_start.
-        const pending = pendingTaskCalls.get(sessionID) ?? [];
-        pending.push(callID);
-        pendingTaskCalls.set(sessionID, pending);
+        tracker.registerTaskCall(sessionID, callID);
 
         await sendEvent(
           makeEvent("subagent_start", sessionID, {
@@ -650,16 +603,7 @@ const plugin: Plugin = async (ctx: PluginInput): Promise<Hooks> => {
 
       if (isSubagentTool(tool)) {
         // Clean up pendingTaskCalls in case child session never appeared (error case)
-        const pending = pendingTaskCalls.get(sessionID);
-        if (pending) {
-          const idx = pending.indexOf(callID);
-          if (idx !== -1) {
-            pending.splice(idx, 1);
-            if (pending.length === 0) {
-              pendingTaskCalls.delete(sessionID);
-            }
-          }
-        }
+        tracker.removePendingTaskCall(sessionID, callID);
         await sendEvent(
           makeEvent("subagent_stop", sessionID, {
             agent_id: `subagent_${callID}`,

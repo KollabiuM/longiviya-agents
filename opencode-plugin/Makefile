@@ -6,7 +6,7 @@ install:
 	$(PKG_MGR) install
 
 test:
-	@if ls src/*.test.ts tests/*.test.ts >/dev/null 2>&1; then $(PKG_MGR) test; else echo "opencode-plugin: no tests yet (see QA-002)"; fi
+	@if find src tests -name '*.test.ts' 2>/dev/null | grep -q .; then $(PKG_MGR) test; else echo "opencode-plugin: no tests yet (see QA-002)"; fi
 
 lint:
 	$(PKG_MGR) run lint

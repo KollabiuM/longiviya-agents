@@ -1,24 +1,29 @@
 /**
- * WebSocket Event Handler
+ * WebSocket Event Handler (thin lifecycle binding).
  *
- * Connects to the backend WebSocket and dispatches events to the state machine.
- * Handles agent additions/removals and state reconciliation.
+ * Wires the {@link WebSocketController} (transport: connect/reconnect/backoff)
+ * to React and dispatches incoming messages to the appropriate domain module:
+ *   - `state_update` → {@link reconcileState} (agent diff, spawn policy, office sync)
+ *   - `pre/post_tool_use` → {@link TypingTracker} (min-duration typing timer)
+ *   - `event` / `git_status` / `reload` / `session_deleted` / `error` → handled inline
+ *
+ * All heavy logic has been extracted so this file is just plumbing: refs that
+ * persist across renders, a controller instance, and a `useEffect` that opens
+ * and tears down the connection. See ARC-018.
  */
 
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useGameStore } from "@/stores/gameStore";
 import { useAttentionStore } from "@/stores/attentionStore";
 import { usePreferencesStore } from "@/stores/preferencesStore";
 import { agentMachineService } from "@/machines/agentMachineService";
-import {
-  getNextSpawnPosition,
-  getDeskPosition,
-  getQueuePosition,
-  resetSpawnIndex,
-} from "@/systems/queuePositions";
-import type { GameState, WebSocketMessage, Position, EventType } from "@/types";
+import { resetSpawnIndex } from "@/systems/queuePositions";
+import { TypingTracker } from "@/systems/typingTracker";
+import { reconcileState } from "@/systems/stateReconciler";
+import { WebSocketController } from "@/systems/webSocketController";
+import type { EventType, WebSocketMessage } from "@/types";
 
 // ============================================================================
 // TYPES
@@ -37,252 +42,50 @@ export function useWebSocketEvents({
   sessionId,
   enabled = true,
 }: UseWebSocketEventsOptions): void {
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const retryCountRef = useRef(0);
+  // ---- Domain-tracking refs (read/written by reconcileState) ----
   const processedAgentsRef = useRef<Set<string>>(new Set());
+  const currentSessionIdRef = useRef(sessionId);
+  currentSessionIdRef.current = sessionId;
+  // Prevents backend queue state from overwriting the frontend's animated queue
+  // after the initial mid-session-join sync.
+  const initialQueueSyncDoneRef = useRef<string | null>(null);
+  // Per-entity last bubble text — suppresses re-enqueue after display clear.
+  const lastSeenBubbleTextRef = useRef<Map<string, string>>(new Map());
 
-  // Connection ID to track which connection is current (prevents stale onclose handlers)
-  const connectionIdRef = useRef(0);
+  // ---- Typing tracker (min-duration state machine, extracted) ----
+  // Created once; setTyping routes "boss"/"main" → boss store, else agent store.
+  const typingTrackerRef = useRef<TypingTracker | null>(null);
+  if (typingTrackerRef.current === null) {
+    typingTrackerRef.current = new TypingTracker((key, typing) => {
+      if (key === "boss" || key === "main") {
+        useGameStore.getState().setBossTyping(typing);
+      } else {
+        useGameStore.getState().setAgentTyping(key, typing);
+      }
+    });
+  }
 
-  // Track typing start times and pending timeouts for minimum typing duration (500ms)
-  const typingStartTimesRef = useRef<Map<string, number>>(new Map());
-  const typingTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
-  const MIN_TYPING_DURATION_MS = 500;
-
-  // Store actions - use getState() for stable references
+  // ---- Store actions (stable zustand references) ----
   const setConnected = useGameStore.getState().setConnected;
   const setSessionId = useGameStore.getState().setSessionId;
   const setGitStatus = useGameStore.getState().setGitStatus;
   const addEventLog = useGameStore.getState().addEventLog;
-  const enqueueBubble = useGameStore.getState().enqueueBubble;
 
-  // Track the current session ID for message validation
-  const currentSessionIdRef = useRef(sessionId);
-  currentSessionIdRef.current = sessionId;
+  // ---- Reconnect bookkeeping (clears stale tracking state on a fresh socket) ----
+  const handleReconnectReset = useCallback(() => {
+    processedAgentsRef.current.clear();
+    lastSeenBubbleTextRef.current.clear();
+    resetSpawnIndex();
+  }, []);
 
-  // Track whether initial queue sync has been done for this session
-  // (prevents backend queue state from overwriting frontend's animated queue)
-  const initialQueueSyncDoneRef = useRef<string | null>(null);
-
-  // Track last seen bubble text from backend per entity to prevent re-enqueueing
-  // after bubble clears from display
-  const lastSeenBubbleTextRef = useRef<Map<string, string>>(new Map());
-
-  // Handle incoming state update
-  const handleStateUpdate = useCallback(
-    (state: GameState) => {
-      // Ignore state updates from old sessions (race condition protection)
-      if (state.sessionId !== currentSessionIdRef.current) {
-        return;
-      }
-
-      const store = useGameStore.getState();
-      const currentAgentIds = new Set(store.agents.keys());
-      const backendAgentIds = new Set(state.agents.map((a) => a.id));
-
-      // Detect new agents (arrivals)
-      for (const backendAgent of state.agents) {
-        if (
-          !currentAgentIds.has(backendAgent.id) &&
-          !processedAgentsRef.current.has(backendAgent.id)
-        ) {
-          processedAgentsRef.current.add(backendAgent.id);
-
-          // Determine agent's location for mid-session join
-          // There are three cases:
-          // 1. Agent in arrival_queue with ARRIVING state → still arriving (spawn from elevator)
-          // 2. Agent in departure_queue with WAITING state → at departure queue position
-          // 3. Agent with WORKING state, not in queues → at their desk
-          const isInArrivalQueue =
-            state.arrivalQueue?.includes(backendAgent.id) ?? false;
-          const isInDepartureQueue =
-            state.departureQueue?.includes(backendAgent.id) ?? false;
-          const arrivalQueueIndex =
-            state.arrivalQueue?.indexOf(backendAgent.id) ?? -1;
-          const departureQueueIndex =
-            state.departureQueue?.indexOf(backendAgent.id) ?? -1;
-
-          let spawnPosition: Position;
-          let skipArrival = false;
-
-          // Determine spawn options based on queue/desk state
-          let queueType: "arrival" | "departure" | undefined;
-          let queueIndex: number | undefined;
-
-          if (backendAgent.state === "arriving") {
-            // Agent is still arriving - spawn from elevator
-            spawnPosition = getNextSpawnPosition();
-          } else if (isInArrivalQueue) {
-            // Agent is in arrival queue (not arriving) - spawn at their queue position
-            // Queue position 0 = ready spot (A0), position 1+ = waiting spots
-            const queuePosition = getQueuePosition(
-              "arrival",
-              arrivalQueueIndex + 1,
-            );
-            spawnPosition = queuePosition ?? getNextSpawnPosition();
-            skipArrival = true;
-            queueType = "arrival";
-            queueIndex = arrivalQueueIndex;
-          } else if (isInDepartureQueue) {
-            // Agent is in departure queue - spawn at their queue position
-            // Queue position 0 = ready spot (D0), position 1+ = waiting spots
-            const queuePosition = getQueuePosition(
-              "departure",
-              departureQueueIndex + 1,
-            );
-            spawnPosition =
-              queuePosition ?? getDeskPosition(backendAgent.desk ?? 1);
-            skipArrival = true;
-            queueType = "departure";
-            queueIndex = departureQueueIndex;
-          } else if (backendAgent.desk) {
-            // Agent is at their desk working
-            spawnPosition = getDeskPosition(backendAgent.desk);
-            skipArrival = true;
-          } else {
-            // Fallback - spawn from elevator
-            spawnPosition = getNextSpawnPosition();
-          }
-
-          // Add to store first
-          store.addAgent(backendAgent, spawnPosition);
-
-          // Spawn state machine with backend state for mid-session handling
-          agentMachineService.spawnAgent(
-            backendAgent.id,
-            backendAgent.name ?? null,
-            backendAgent.desk ?? null,
-            spawnPosition,
-            {
-              backendState: backendAgent.state,
-              skipArrival,
-              queueType,
-              queueIndex,
-            },
-          );
-
-          // If agent has a bubble and is at desk/queue, enqueue it immediately
-          if (skipArrival && backendAgent.bubble) {
-            enqueueBubble(backendAgent.id, backendAgent.bubble);
-          }
-        } else if (currentAgentIds.has(backendAgent.id)) {
-          // Update existing agent's backend state, name, and task
-          // (name and task may have been enriched by AI after initial spawn)
-          store.updateAgentMeta(backendAgent.id, {
-            backendState: backendAgent.state,
-            name: backendAgent.name ?? null,
-            currentTask: backendAgent.currentTask ?? null,
-          });
-
-          // Enqueue bubbles for agents who are at their desk working
-          // Only show bubbles when agent is at desk (phase === "idle")
-          // This prevents showing tool calls during arrival/departure animations
-          const agent = store.agents.get(backendAgent.id);
-          const isAtDesk = agent?.phase === "idle";
-
-          if (backendAgent.bubble && isAtDesk) {
-            const bubbleText = backendAgent.bubble.text;
-            const lastSeen = lastSeenBubbleTextRef.current.get(backendAgent.id);
-            // Only enqueue if backend sent a NEW bubble text (not the same as last time)
-            if (bubbleText !== lastSeen) {
-              lastSeenBubbleTextRef.current.set(backendAgent.id, bubbleText);
-              if (!store.hasBubbleText(backendAgent.id, bubbleText)) {
-                enqueueBubble(backendAgent.id, backendAgent.bubble);
-              }
-            }
-          }
-        }
-      }
-
-      // Detect removed agents (departures)
-      for (const agentId of currentAgentIds) {
-        if (!backendAgentIds.has(agentId)) {
-          const agent = store.agents.get(agentId);
-          if (!agent) continue;
-
-          if (agent.phase === "idle") {
-            agentMachineService.triggerDeparture(agentId);
-          } else {
-            // Backend removed the agent before its arrival animation reached
-            // the desk. Queue the departure so it fires once the agent is
-            // idle, instead of waiting for the next state-update.
-            agentMachineService.markPendingDeparture(agentId);
-          }
-        }
-      }
-
-      // Update boss state
-      store.updateBossBackendState(state.boss.state);
-      store.updateBossTask(state.boss.currentTask ?? null);
-
-      // Enqueue boss bubble if present
-      if (state.boss.bubble) {
-        const bubbleText = state.boss.bubble.text;
-        const lastSeen = lastSeenBubbleTextRef.current.get("boss");
-        // Only enqueue if backend sent a NEW bubble text (not the same as last time)
-        if (bubbleText !== lastSeen) {
-          lastSeenBubbleTextRef.current.set("boss", bubbleText);
-          const alreadyHas = store.hasBubbleText("boss", bubbleText);
-          if (!alreadyHas) {
-            enqueueBubble("boss", state.boss.bubble);
-          }
-        }
-      }
-
-      // Update office state
-      store.setSessionId(state.sessionId);
-      store.setDeskCount(state.office.deskCount ?? 8);
-      // NOTE: elevatorState is NOT synced from backend - it's controlled by
-      // the frontend's agent state machine for smooth animations
-      store.setPhoneState(state.office.phoneState ?? "idle");
-
-      // Sync queue state from backend (only on initial connection for mid-session joins)
-      // After initial sync, frontend manages queue state based on agent state machine events
-      if (
-        (state.arrivalQueue || state.departureQueue) &&
-        initialQueueSyncDoneRef.current !== state.sessionId
-      ) {
-        store.syncQueues(state.arrivalQueue ?? [], state.departureQueue ?? []);
-        initialQueueSyncDoneRef.current = state.sessionId;
-      }
-      // Only update context utilization if explicitly provided (not null/undefined)
-      // This prevents flip-flopping between actual values and 0
-      if (
-        state.office.contextUtilization !== null &&
-        state.office.contextUtilization !== undefined
-      ) {
-        store.setContextUtilization(state.office.contextUtilization);
-      }
-      // Update safety sign counter
-      if (
-        state.office.toolUsesSinceCompaction !== null &&
-        state.office.toolUsesSinceCompaction !== undefined
-      ) {
-        store.setToolUsesSinceCompaction(state.office.toolUsesSinceCompaction);
-      }
-      store.setTodos(state.todos ?? []);
-      // Sync print report flag (triggers printer animation)
-      store.setPrintReport(state.office.printReport ?? false);
-      // Sync whiteboard data for multi-mode display
-      if (state.whiteboardData) {
-        store.setWhiteboardData(state.whiteboardData);
-      }
-      // Sync conversation history (user prompts + Claude responses)
-      if (state.conversation) {
-        store.setConversation(state.conversation);
-      }
-    },
-    [enqueueBubble],
-  );
-
-  // Handle WebSocket messages
+  // ---- Message dispatch ----
   const handleMessage = useCallback(
     (event: MessageEvent) => {
       try {
         const message: WebSocketMessage = JSON.parse(event.data);
 
-        // Validate session ID for messages that include it (except session_deleted which is global)
+        // Validate session id for messages that include it
+        // (session_deleted and reload are global).
         if (
           message.type !== "session_deleted" &&
           message.type !== "reload" &&
@@ -295,7 +98,12 @@ export function useWebSocketEvents({
         switch (message.type) {
           case "state_update":
             if (message.state) {
-              handleStateUpdate(message.state);
+              reconcileState(message.state, {
+                currentSessionId: currentSessionIdRef.current,
+                processedAgents: processedAgentsRef.current,
+                lastSeenBubbleText: lastSeenBubbleTextRef.current,
+                initialQueueSyncDone: initialQueueSyncDoneRef,
+              });
             }
             break;
 
@@ -303,73 +111,36 @@ export function useWebSocketEvents({
             if (message.event) {
               addEventLog(message.event);
 
-              // Clear processed agents on session_start to allow re-detection
-              // This is needed when simulation re-runs with the same session ID and agent IDs
+              // Clear processed agents on session_start to allow re-detection.
+              // Needed when simulation re-runs with the same session id and agent ids.
               if (message.event.type === "session_start") {
                 processedAgentsRef.current.clear();
                 lastSeenBubbleTextRef.current.clear();
                 resetSpawnIndex();
               }
 
-              // Toggle typing animation on tool use events with minimum duration
+              // Toggle typing animation on tool-use events (min-duration enforced
+              // by TypingTracker).
               if (
                 message.event.type === "pre_tool_use" ||
                 message.event.type === "post_tool_use"
               ) {
                 const agentId = message.event.agentId;
                 const typingKey = agentId || "boss";
-
-                const setTyping = (typing: boolean) => {
-                  // "main" is the main Claude agent (boss), not a subagent
-                  if (!agentId || agentId === "boss" || agentId === "main") {
-                    useGameStore.getState().setBossTyping(typing);
-                  } else {
-                    useGameStore.getState().setAgentTyping(agentId, typing);
-                  }
-                };
-
                 if (message.event.type === "pre_tool_use") {
-                  // Clear any pending typing-off timeout
-                  const existingTimeout =
-                    typingTimeoutsRef.current.get(typingKey);
-                  if (existingTimeout) {
-                    clearTimeout(existingTimeout);
-                    typingTimeoutsRef.current.delete(typingKey);
-                  }
-                  // Record start time and start typing
-                  typingStartTimesRef.current.set(typingKey, Date.now());
-                  setTyping(true);
+                  typingTrackerRef.current?.onPreToolUse(typingKey);
                 } else {
-                  // post_tool_use - ensure minimum typing duration
-                  const startTime = typingStartTimesRef.current.get(typingKey);
-                  const elapsed = startTime
-                    ? Date.now() - startTime
-                    : MIN_TYPING_DURATION_MS;
-                  const remaining = MIN_TYPING_DURATION_MS - elapsed;
-
-                  if (remaining > 0) {
-                    // Delay turning off typing to meet minimum duration
-                    const timeout = setTimeout(() => {
-                      setTyping(false);
-                      typingTimeoutsRef.current.delete(typingKey);
-                      typingStartTimesRef.current.delete(typingKey);
-                    }, remaining);
-                    typingTimeoutsRef.current.set(typingKey, timeout);
-                  } else {
-                    // Minimum duration already met, turn off immediately
-                    setTyping(false);
-                    typingStartTimesRef.current.delete(typingKey);
-                  }
+                  typingTrackerRef.current?.onPostToolUse(typingKey);
                 }
               }
 
-              // Trigger compaction animation on context_compaction event
+              // Trigger compaction animation on context_compaction event.
               if (message.event.type === "context_compaction") {
                 useGameStore.getState().triggerCompaction();
               }
 
-              // Attention toasts - wire event processing into attention store
-              // Check toast filter preferences before generating toasts
+              // Attention toasts — wire event processing into attention store.
+              // Check toast filter preferences before generating toasts.
               const attentionEventTypes = new Set<EventType>([
                 "permission_request",
                 "error",
@@ -414,8 +185,8 @@ export function useWebSocketEvents({
             break;
 
           case "session_deleted":
-            // Session was deleted (possibly by another client)
-            // Emit custom event for session list components to refetch
+            // Session was deleted (possibly by another client).
+            // Emit custom event for session list components to refetch.
             window.dispatchEvent(
               new CustomEvent("session-deleted", {
                 detail: { sessionId: message.session_id },
@@ -438,125 +209,51 @@ export function useWebSocketEvents({
         console.error("[WS] Failed to parse message:", error);
       }
     },
-    [handleStateUpdate, addEventLog, setGitStatus],
+    [addEventLog, setGitStatus],
   );
 
-  // Connect to WebSocket
-  const connect = useCallback(() => {
-    if (!sessionId || useGameStore.getState().isReplaying) return;
+  // ---- WebSocket transport controller (created once, opts synced each render) ----
+  const controllerRef = useRef<WebSocketController | null>(null);
+  if (controllerRef.current === null) {
+    const baseUrl =
+      process.env.NEXT_PUBLIC_WS_URL ||
+      (typeof window !== "undefined"
+        ? `ws://${window.location.hostname}:8000`
+        : "ws://localhost:8000");
+    controllerRef.current = new WebSocketController({
+      sessionId,
+      enabled,
+      baseUrl,
+      onMessage: handleMessage,
+      onReconnectReset: handleReconnectReset,
+      setConnected,
+      setSessionId,
+      isReplaying: () => useGameStore.getState().isReplaying,
+      isCurrentSession: (id) => id === currentSessionIdRef.current,
+    });
+  }
+  // Keep mutable opts fresh so the controller always closes over current state
+  // without re-creating the instance (and churning the socket).
+  controllerRef.current.opts.sessionId = sessionId;
+  controllerRef.current.opts.enabled = enabled;
+  controllerRef.current.opts.onMessage = handleMessage;
+  controllerRef.current.opts.onReconnectReset = handleReconnectReset;
 
-    // Increment connection ID to invalidate any pending onclose handlers
-    connectionIdRef.current++;
-    const thisConnectionId = connectionIdRef.current;
-
-    // Clean up existing connection
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    // Clear any pending reconnect timeout
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-
-    const wsUrl =
-      process.env.NEXT_PUBLIC_WS_URL || `ws://${window.location.hostname}:8000`;
-    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      // Check if this connection is still current
-      if (connectionIdRef.current !== thisConnectionId) {
-        ws.close();
-        return;
-      }
-
-      retryCountRef.current = 0;
-      setConnected(true);
-      setSessionId(sessionId);
-
-      // Clear processed agents, bubble tracking, and reset spawn positions on reconnect
-      processedAgentsRef.current.clear();
-      lastSeenBubbleTextRef.current.clear();
-      resetSpawnIndex();
-    };
-
-    ws.onmessage = (event) => {
-      // Check if this connection is still current
-      if (connectionIdRef.current !== thisConnectionId) {
-        return;
-      }
-      handleMessage(event);
-    };
-
-    ws.onerror = () => {
-      if (connectionIdRef.current !== thisConnectionId) {
-        return;
-      }
-      console.warn("[WS] Connection error — will retry");
-    };
-
-    ws.onclose = (event) => {
-      // Check if this connection is still current - prevents stale handlers
-      if (connectionIdRef.current !== thisConnectionId) {
-        return;
-      }
-
-      void event; // Acknowledge parameter
-      setConnected(false);
-
-      if (enabled && sessionId === currentSessionIdRef.current) {
-        const delay = Math.min(
-          1000 * Math.pow(2, retryCountRef.current),
-          30000,
-        );
-        retryCountRef.current++;
-        reconnectTimeoutRef.current = setTimeout(() => {
-          reconnectTimeoutRef.current = null;
-          if (sessionId === currentSessionIdRef.current) {
-            connect();
-          }
-        }, delay);
-      }
-    };
-  }, [sessionId, enabled, handleMessage, setConnected, setSessionId]);
-
-  // Effect to manage WebSocket connection
+  // ---- Connection lifecycle ----
   useEffect(() => {
     const isReplaying = useGameStore.getState().isReplaying;
     if (!enabled || !sessionId || isReplaying) {
-      // Disconnect if disabled or in replay mode
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      controllerRef.current?.disconnect();
       return;
     }
 
-    connect();
-
-    // Capture refs into locals at effect-run time so the cleanup uses stable
-    // values (per react-hooks/exhaustive-deps guidance).
-    const timeouts = typingTimeoutsRef.current;
-    const startTimes = typingStartTimesRef.current;
+    controllerRef.current?.connect();
 
     return () => {
-      // Clean up on unmount
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-      timeouts.forEach((t) => clearTimeout(t));
-      timeouts.clear();
-      startTimes.clear();
+      controllerRef.current?.disconnect();
+      typingTrackerRef.current?.clear();
     };
-  }, [sessionId, enabled, connect]);
+  }, [sessionId, enabled]);
 }
 
 // ============================================================================
@@ -568,12 +265,12 @@ export function useWebSocketEvents({
  * Called on reconnection or when switching sessions.
  */
 export function resetFrontendState(): void {
-  // Reset store (use resetForSessionSwitch to allow WebSocket reconnection)
+  // Reset store (use resetForSessionSwitch to allow WebSocket reconnection).
   useGameStore.getState().resetForSessionSwitch();
 
-  // Reset machine service
+  // Reset machine service.
   agentMachineService.reset();
 
-  // Reset spawn positions
+  // Reset spawn positions.
   resetSpawnIndex();
 }
