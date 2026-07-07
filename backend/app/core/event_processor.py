@@ -11,6 +11,7 @@ Public surface (unchanged from before the refactor):
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -174,6 +175,38 @@ class EventProcessor:
         # per event (O(N x events/sec)). See ``_schedule_overview_broadcast``.
         self._overview_flush_task: asyncio.Task[None] | None = None
         self._overview_flush_interval = 0.05  # 50 ms debounce window
+        # Single source of truth for post-broadcast async enrichment.
+        #
+        # The sync mutation of every event type runs through
+        # ``StateMachine._DISPATCH_TABLE`` (in state_machine.py) via
+        # ``sm.transition(event)``. This table is its async counterpart: each
+        # event type that needs *additional* async enrichment after the
+        # state broadcast maps to exactly one ``_enrich_*`` method here.
+        #
+        # To add a new event type:
+        #   1) add the member to ``EventType`` (models/events.py);
+        #   2) add a sync handler to ``state_machine._DISPATCH_TABLE`` if it
+        #      mutates session/agent state (needed by deterministic replay);
+        #   3) add an ``_enrich_*`` entry here if it needs async enrichment
+        #      (transcript reads, AI summaries, poller bootstrap, broadcasts).
+        # All post-broadcast enrichment runs AFTER ``broadcast_state`` /
+        # ``broadcast_event`` and BEFORE ``_schedule_overview_broadcast()``;
+        # only one entry fires per event (events have a single type), so the
+        # relative order of entries here is not behaviourally significant.
+        self._post_broadcast_enrichers: dict[
+            EventType, Callable[[StateMachine, Event, str], Awaitable[None]]
+        ] = {
+            EventType.SUBAGENT_START: self._enrich_subagent_start,
+            EventType.SUBAGENT_INFO: self._enrich_subagent_info,
+            EventType.AGENT_UPDATE: self._enrich_agent_update,
+            EventType.SUBAGENT_STOP: self._enrich_subagent_stop,
+            EventType.STOP: self._enrich_stop,
+            EventType.USER_PROMPT_SUBMIT: self._enrich_user_prompt_submit,
+            EventType.PRE_TOOL_USE: self._enrich_pre_tool_use,
+            EventType.TASK_CREATED: self._enrich_task_created,
+            EventType.TASK_COMPLETED: self._enrich_task_completed,
+            EventType.TEAMMATE_IDLE: self._enrich_teammate_idle,
+        }
 
     # ------------------------------------------------------------------
     # Poller lifecycle helpers
@@ -324,6 +357,54 @@ class EventProcessor:
                     f"Error processing {event.event_type}: {e!s}",
                     event.timestamp.isoformat(),
                 )
+
+    # ------------------------------------------------------------------
+    # Post-broadcast async enrichment (one method per event type)
+    #
+    # Each ``_enrich_*`` method is a thin adapter with the uniform signature
+    # ``(sm, event, agent_id) -> None`` so the dispatch table can call it
+    # without per-type branching. The body is exactly the handler call the
+    # corresponding ``if event.event_type == ...`` block used to make -- no
+    # behaviour change, just table-driven routing. See
+    # ``self._post_broadcast_enrichers`` for the single source of truth.
+    # ------------------------------------------------------------------
+
+    async def _enrich_subagent_start(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+        await handle_subagent_start(
+            sm,
+            event,
+            self._ensure_transcript_poller,
+            self._update_agent_state,
+        )
+
+    async def _enrich_subagent_info(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+        await handle_subagent_info(sm, event, self._ensure_transcript_poller)
+
+    async def _enrich_agent_update(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+        await handle_agent_update(sm, event)
+
+    async def _enrich_subagent_stop(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+        await handle_subagent_stop(sm, event, self._persist_synthetic_event)
+
+    async def _enrich_stop(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+        await handle_stop(sm, event, agent_id)
+
+    async def _enrich_user_prompt_submit(
+        self, sm: StateMachine, event: Event, agent_id: str
+    ) -> None:
+        await handle_user_prompt_submit(sm, event, agent_id)
+
+    async def _enrich_pre_tool_use(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+        await handle_pre_tool_use(sm, event, agent_id, self._get_event_summary(event))
+
+    async def _enrich_task_created(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+        await handle_task_created(sm, event)
+
+    async def _enrich_task_completed(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+        await handle_task_completed(sm, event)
+
+    async def _enrich_teammate_idle(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+        await handle_teammate_idle(sm, event)
 
     # ------------------------------------------------------------------
     # Internal routing
@@ -487,63 +568,17 @@ class EventProcessor:
             await broadcast_room_state(sm.room_id, orchestrator)
 
         # ------------------------------------------------------------------
-        # SUBAGENT_START
+        # Post-broadcast async enrichment (single dispatch).
+        #
+        # Replaces ten sequential ``if event.event_type ==`` blocks. Each event
+        # type maps to at most one ``_enrich_*`` method (see
+        # ``self._post_broadcast_enrichers``), so exactly one fires per event.
+        # The handlers themselves are unchanged -- this is purely table-driven
+        # routing. Adding a new event type only requires a new table entry.
         # ------------------------------------------------------------------
-        if event.event_type == EventType.SUBAGENT_START:
-            await handle_subagent_start(
-                sm,
-                event,
-                self._ensure_transcript_poller,
-                self._update_agent_state,
-            )
-
-        # ------------------------------------------------------------------
-        # SUBAGENT_INFO
-        # ------------------------------------------------------------------
-        if event.event_type == EventType.SUBAGENT_INFO:
-            await handle_subagent_info(sm, event, self._ensure_transcript_poller)
-
-        # ------------------------------------------------------------------
-        # AGENT_UPDATE
-        # ------------------------------------------------------------------
-        if event.event_type == EventType.AGENT_UPDATE:
-            await handle_agent_update(sm, event)
-
-        # ------------------------------------------------------------------
-        # SUBAGENT_STOP
-        # ------------------------------------------------------------------
-        if event.event_type == EventType.SUBAGENT_STOP:
-            await handle_subagent_stop(sm, event, self._persist_synthetic_event)
-
-        # ------------------------------------------------------------------
-        # STOP
-        # ------------------------------------------------------------------
-        if event.event_type == EventType.STOP:
-            await handle_stop(sm, event, agent_id)
-
-        # ------------------------------------------------------------------
-        # USER_PROMPT_SUBMIT
-        # ------------------------------------------------------------------
-        if event.event_type == EventType.USER_PROMPT_SUBMIT:
-            await handle_user_prompt_submit(sm, event, agent_id)
-
-        # ------------------------------------------------------------------
-        # PRE_TOOL_USE
-        # ------------------------------------------------------------------
-        if event.event_type == EventType.PRE_TOOL_USE:
-            await handle_pre_tool_use(sm, event, agent_id, self._get_event_summary(event))
-
-        # ------------------------------------------------------------------
-        # TEAM EVENTS
-        # ------------------------------------------------------------------
-        if event.event_type == EventType.TASK_CREATED:
-            await handle_task_created(sm, event)
-
-        if event.event_type == EventType.TASK_COMPLETED:
-            await handle_task_completed(sm, event)
-
-        if event.event_type == EventType.TEAMMATE_IDLE:
-            await handle_teammate_idle(sm, event)
+        enricher = self._post_broadcast_enrichers.get(event.event_type)
+        if enricher is not None:
+            await enricher(sm, event, agent_id)
 
         # ------------------------------------------------------------------
         # Cross-session overview broadcast (Command Center). Scheduled LAST so
