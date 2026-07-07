@@ -75,10 +75,18 @@ def override_engine(new_engine: AsyncEngine) -> None:
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
-    """Dependency for getting a database session."""
+    """Dependency for getting a database session.
+
+    Rolls back automatically on any exception raised by the route body so
+    callers no longer need a per-route ``try/except`` just to call
+    ``db.rollback()`` before re-raising (ARC-024).
+    """
     async with _session_factory() as session:
         try:
             yield session
+        except Exception:
+            await session.rollback()
+            raise
         finally:
             await session.close()
 

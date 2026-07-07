@@ -211,6 +211,20 @@ class TestWebSocketOriginValidation:
         ws = self._make_ws(origin="http://localhost:3000")
         assert validate_websocket_origin(ws) is True
 
+    def test_cors_origin_non_loopback_rejected(self) -> None:
+        """A non-loopback origin present in BACKEND_CORS_ORIGINS must still be
+        rejected for WebSocket — the WS trust boundary stays localhost-only
+        even when CORS is widened (QA-014).
+
+        ``http://0.0.0.0:3000`` is in the default ``BACKEND_CORS_ORIGINS`` but
+        ``0.0.0.0`` is not a loopback hostname, so it must be excluded from the
+        derived WS allowlist.
+        """
+        settings = get_settings()
+        assert "http://0.0.0.0:3000" in settings.BACKEND_CORS_ORIGINS
+        ws = self._make_ws(origin="http://0.0.0.0:3000")
+        assert validate_websocket_origin(ws) is False
+
     def test_external_origin_rejected(self) -> None:
         ws = self._make_ws(origin="https://evil.com")
         assert validate_websocket_origin(ws) is False

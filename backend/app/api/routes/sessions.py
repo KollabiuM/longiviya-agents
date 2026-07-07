@@ -106,95 +106,129 @@ async def list_sessions(
         List of session summaries matching the given filters.
     """
     logger.debug("API: list_sessions called (room_id=%s, floor_id=%s)", room_id, floor_id)
-    try:
-        # Single query with GROUP BY to get event counts for all sessions.
-        # Replaces N+1 pattern where each session required a separate COUNT query.
-        event_count_subq = (
-            select(
-                EventRecord.session_id,
-                func.count(EventRecord.id).label("event_count"),
-            )
-            .group_by(EventRecord.session_id)
-            .subquery()
+    # Single query with GROUP BY to get event counts for all sessions.
+    # Replaces N+1 pattern where each session required a separate COUNT query.
+    event_count_subq = (
+        select(
+            EventRecord.session_id,
+            func.count(EventRecord.id).label("event_count"),
+        )
+        .group_by(EventRecord.session_id)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            SessionRecord,
+            func.coalesce(event_count_subq.c.event_count, 0).label("event_count"),
+        )
+        .outerjoin(event_count_subq, SessionRecord.id == event_count_subq.c.session_id)
+        .order_by(SessionRecord.updated_at.desc())
+    )
+
+    # Apply optional room/floor filters
+    if room_id is not None:
+        stmt = stmt.where(SessionRecord.room_id == room_id)
+    if floor_id is not None:
+        stmt = stmt.where(SessionRecord.floor_id == floor_id)
+    if status is not None:
+        stmt = stmt.where(SessionRecord.status == status)
+
+    stmt = stmt.limit(min(limit, 500))
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    # Find session IDs that have at least one session_start event.
+    # Child @agent sessions never get session_start, so they're excluded.
+    sessions_with_start_stmt = (
+        select(EventRecord.session_id).where(EventRecord.event_type == "session_start").distinct()
+    )
+    start_result = await db.execute(sessions_with_start_stmt)
+    sessions_with_start: set[str] = {row[0] for row in start_result.all()}
+
+    sessions: list[SessionSummary] = []
+    for row in rows:
+        rec = row[0]
+        count = int(row[1])
+
+        # Skip child sessions (no session_start event) unless it's the special
+        # simulation session which also lacks one but is always valid.
+        if rec.id not in sessions_with_start and not rec.id.startswith("sim_"):
+            continue
+
+        created_utc = (
+            rec.created_at.astimezone(UTC)
+            if rec.created_at.tzinfo
+            else rec.created_at.replace(tzinfo=UTC)
+        )
+        updated_utc = (
+            rec.updated_at.astimezone(UTC)
+            if rec.updated_at.tzinfo
+            else rec.updated_at.replace(tzinfo=UTC)
         )
 
-        stmt = (
-            select(
-                SessionRecord,
-                func.coalesce(event_count_subq.c.event_count, 0).label("event_count"),
-            )
-            .outerjoin(event_count_subq, SessionRecord.id == event_count_subq.c.session_id)
-            .order_by(SessionRecord.updated_at.desc())
+        sessions.append(
+            {
+                "id": rec.id,
+                "label": rec.label,
+                "displayName": rec.display_name,
+                "projectName": rec.project_name,
+                "projectRoot": rec.project_root,
+                "createdAt": created_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                "updatedAt": updated_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                "status": rec.status,
+                "eventCount": count,
+                "floorId": rec.floor_id,
+                "roomId": rec.room_id,
+            }
         )
-
-        # Apply optional room/floor filters
-        if room_id is not None:
-            stmt = stmt.where(SessionRecord.room_id == room_id)
-        if floor_id is not None:
-            stmt = stmt.where(SessionRecord.floor_id == floor_id)
-        if status is not None:
-            stmt = stmt.where(SessionRecord.status == status)
-
-        stmt = stmt.limit(min(limit, 500))
-        result = await db.execute(stmt)
-        rows = result.all()
-
-        # Find session IDs that have at least one session_start event.
-        # Child @agent sessions never get session_start, so they're excluded.
-        sessions_with_start_stmt = (
-            select(EventRecord.session_id)
-            .where(EventRecord.event_type == "session_start")
-            .distinct()
-        )
-        start_result = await db.execute(sessions_with_start_stmt)
-        sessions_with_start: set[str] = {row[0] for row in start_result.all()}
-
-        sessions: list[SessionSummary] = []
-        for row in rows:
-            rec = row[0]
-            count = int(row[1])
-
-            # Skip child sessions (no session_start event) unless it's the special
-            # simulation session which also lacks one but is always valid.
-            if rec.id not in sessions_with_start and not rec.id.startswith("sim_"):
-                continue
-
-            created_utc = (
-                rec.created_at.astimezone(UTC)
-                if rec.created_at.tzinfo
-                else rec.created_at.replace(tzinfo=UTC)
-            )
-            updated_utc = (
-                rec.updated_at.astimezone(UTC)
-                if rec.updated_at.tzinfo
-                else rec.updated_at.replace(tzinfo=UTC)
-            )
-
-            sessions.append(
-                {
-                    "id": rec.id,
-                    "label": rec.label,
-                    "displayName": rec.display_name,
-                    "projectName": rec.project_name,
-                    "projectRoot": rec.project_root,
-                    "createdAt": created_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    "updatedAt": updated_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    "status": rec.status,
-                    "eventCount": count,
-                    "floorId": rec.floor_id,
-                    "roomId": rec.room_id,
-                }
-            )
-        return sessions
-    except Exception as e:
-        logger.exception("Error in list_sessions: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to list sessions") from e
+    return sessions
 
 
 class LabelUpdate(BaseModel):
-    """Request body for updating a session label."""
+    """Request body for the legacy ``PATCH /sessions/{id}/label`` route."""
 
     label: str | None = None
+
+
+class SessionUpdate(BaseModel):
+    """Request body for ``PATCH /sessions/{id}``.
+
+    Both fields are optional; only fields explicitly provided in the request
+    body are applied. ``model_fields_set`` is used to distinguish "field not
+    sent" from an explicit ``null`` (which clears the stored value).
+    """
+
+    display_name: str | None = None
+    label: str | None = None
+
+
+async def _apply_session_update(
+    session_id: str,
+    body: SessionUpdate,
+    db: AsyncSession,
+    *,
+    success_message: str,
+) -> dict[str, str]:
+    """Look up a session, apply the fields explicitly set on *body*, commit.
+
+    Raises:
+        HTTPException: 404 if the session is not found. Any other exception
+        propagates to the app-level handler (ARC-024); ``get_db`` rolls back.
+    """
+    result = await db.execute(select(SessionRecord).where(SessionRecord.id == session_id))
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    fields_set = body.model_fields_set
+    if "label" in fields_set:
+        session.label = body.label
+    if "display_name" in fields_set:
+        session.display_name = body.display_name
+
+    await db.commit()
+    return {"status": "success", "message": success_message}
 
 
 @router.patch("/{session_id}/label")
@@ -203,6 +237,10 @@ async def update_session_label(
 ) -> dict[str, str]:
     """Update the label of a session.
 
+    Thin delegate over :func:`update_session` so the legacy ``/label`` route
+    and the general ``PATCH /sessions/{id}`` route share one implementation
+    (ARC-024). The route and request/response shapes are preserved.
+
     Args:
         session_id: Identifier for the session to update.
         body: Request body containing the new label value.
@@ -210,67 +248,38 @@ async def update_session_label(
 
     Returns:
         A status payload confirming the update.
-
-    Raises:
-        HTTPException: If the session is not found or update fails.
     """
-    try:
-        result = await db.execute(select(SessionRecord).where(SessionRecord.id == session_id))
-        session = result.scalar_one_or_none()
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        session.label = body.label
-        await db.commit()
-        return {"status": "success", "message": f"Label updated for session {session_id}"}
-    except HTTPException:
-        await db.rollback()
-        raise
-    except Exception as e:
-        await db.rollback()
-        logger.exception("Error in update_session_label: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to update session label") from e
-
-
-class DisplayNameUpdate(BaseModel):
-    """Request body for updating a session display name."""
-
-    display_name: str | None = None
+    # Construct a SessionUpdate from the explicit label value so
+    # ``model_fields_set`` reports {"label"} regardless of whether the value
+    # is null (clear) or set (update). This preserves the legacy /label
+    # semantics: PATCH /label never touches display_name.
+    return await _apply_session_update(
+        session_id,
+        SessionUpdate(label=body.label),
+        db,
+        success_message=f"Label updated for session {session_id}",
+    )
 
 
 @router.patch("/{session_id}")
 async def update_session(
-    session_id: str, body: DisplayNameUpdate, db: Annotated[AsyncSession, Depends(get_db)]
+    session_id: str, body: SessionUpdate, db: Annotated[AsyncSession, Depends(get_db)]
 ) -> dict[str, str]:
-    """Update the display name of a session.
+    """Update mutable session fields (``display_name``, ``label``).
 
     Args:
         session_id: Identifier for the session to update.
-        body: Request body containing the new display_name value.
+        body: Request body. Only fields explicitly present in the request
+            body are written; a missing field leaves the stored value alone
+            and an explicit ``null`` clears it.
         db: Database session dependency.
 
     Returns:
         A status payload confirming the update.
-
-    Raises:
-        HTTPException: If the session is not found or update fails.
     """
-    try:
-        result = await db.execute(select(SessionRecord).where(SessionRecord.id == session_id))
-        session = result.scalar_one_or_none()
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        session.display_name = body.display_name
-        await db.commit()
-        return {"status": "success", "message": f"Session {session_id} updated"}
-    except HTTPException:
-        await db.rollback()
-        raise
-    except Exception as e:
-        await db.rollback()
-        logger.exception("Error in update_session: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to update session") from e
+    return await _apply_session_update(
+        session_id, body, db, success_message=f"Session {session_id} updated"
+    )
 
 
 class FocusRequest(BaseModel):
@@ -336,69 +345,64 @@ async def focus_session(
         A status payload confirming the focus action.
 
     Raises:
-        HTTPException: If the session is not found or the focus action fails.
+        HTTPException: 404 if the session is not found. Any other failure
+        propagates to the app-level exception handler (ARC-024).
     """
-    try:
-        result = await db.execute(select(SessionRecord).where(SessionRecord.id == session_id))
-        session = result.scalar_one_or_none()
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
+    result = await db.execute(select(SessionRecord).where(SessionRecord.id == session_id))
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-        # Bring Terminal to foreground (non-blocking async subprocess)
+    # Bring Terminal to foreground (non-blocking async subprocess)
+    if sys.platform == "darwin":
+        await asyncio.create_subprocess_exec(
+            "osascript",
+            "-e",
+            'tell application "Terminal" to activate',
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    elif sys.platform == "linux":
+        # Try common Linux terminal activators; non-fatal if unavailable.
+        for cmd in [
+            ["xdg-terminal", "wait"],
+            ["wmctrl", "-xa", "terminal"],
+        ]:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+                break
+            except FileNotFoundError:
+                continue
+
+    # Optionally copy message to clipboard (non-blocking async subprocess)
+    clipboard_message = _validate_clipboard_message(body.message if body else None)
+    if clipboard_message:
+        clipboard_cmd: list[str] = []
         if sys.platform == "darwin":
-            await asyncio.create_subprocess_exec(
-                "osascript",
-                "-e",
-                'tell application "Terminal" to activate',
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
+            clipboard_cmd = ["pbcopy"]
         elif sys.platform == "linux":
-            # Try common Linux terminal activators; non-fatal if unavailable.
-            for cmd in [
-                ["xdg-terminal", "wait"],
-                ["wmctrl", "-xa", "terminal"],
-            ]:
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    await proc.wait()
-                    break
-                except FileNotFoundError:
-                    continue
+            clipboard_cmd = ["xclip", "-selection", "clipboard"]
+        elif sys.platform == "win32":
+            clipboard_cmd = ["clip"]
 
-        # Optionally copy message to clipboard (non-blocking async subprocess)
-        clipboard_message = _validate_clipboard_message(body.message if body else None)
-        if clipboard_message:
-            clipboard_cmd: list[str] = []
-            if sys.platform == "darwin":
-                clipboard_cmd = ["pbcopy"]
-            elif sys.platform == "linux":
-                clipboard_cmd = ["xclip", "-selection", "clipboard"]
-            elif sys.platform == "win32":
-                clipboard_cmd = ["clip"]
+        if clipboard_cmd:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *clipboard_cmd,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.communicate(input=clipboard_message.encode("utf-8"))
+            except FileNotFoundError:
+                logger.warning("Clipboard command not found: %s", clipboard_cmd[0])
 
-            if clipboard_cmd:
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *clipboard_cmd,
-                        stdin=asyncio.subprocess.PIPE,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    await proc.communicate(input=clipboard_message.encode("utf-8"))
-                except FileNotFoundError:
-                    logger.warning("Clipboard command not found: %s", clipboard_cmd[0])
-
-        return {"status": "success", "message": f"Session {session_id} focused"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Error in focus_session: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to focus session") from e
+    return {"status": "success", "message": f"Session {session_id} focused"}
 
 
 @router.get("/{session_id}/replay")
@@ -410,80 +414,76 @@ async def get_session_replay(
     Replays events through the state machine to reconstruct the state
     after each event, enabling frontend replay functionality.
     """
-    try:
-        stmt = (
-            select(EventRecord)
-            .where(EventRecord.session_id == session_id)
-            .order_by(EventRecord.timestamp.asc())
-        )
-        result = await db.execute(stmt)
-        events = result.scalars().all()
+    stmt = (
+        select(EventRecord)
+        .where(EventRecord.session_id == session_id)
+        .order_by(EventRecord.timestamp.asc())
+    )
+    result = await db.execute(stmt)
+    events = result.scalars().all()
 
-        from pydantic import ValidationError
+    from pydantic import ValidationError
 
-        from app.core.state_machine import StateMachine
-        from app.models.events import EventAdapter, EventType
+    from app.core.state_machine import StateMachine
+    from app.models.events import EventAdapter, EventType
 
-        sm = StateMachine()
-        replay_data: list[ReplayEntry] = []
+    sm = StateMachine()
+    replay_data: list[ReplayEntry] = []
 
-        for rec in events:
-            try:
-                event_type = EventType(rec.event_type)
-            except ValueError:
-                logger.warning(
-                    "Skipping unknown event_type %r in replay (session=%s)",
-                    rec.event_type,
-                    session_id,
-                )
-                continue
-            try:
-                evt = EventAdapter.validate_python(
-                    {
-                        "event_type": event_type,
-                        "session_id": rec.session_id,
-                        "timestamp": rec.timestamp,
-                        "data": rec.data or {},
-                    }
-                )
-            except ValidationError:
-                # Unknown event_type values reach here too (defensive double
-                # guard alongside the EventType(rec.event_type) try/except).
-                logger.warning(
-                    "Skipping event that failed union validation in replay (session=%s, type=%s)",
-                    rec.event_type,
-                    session_id,
-                )
-                continue
-            sm.transition(evt)
-            state = sm.to_game_state(session_id)
-
-            ts_utc = (
-                rec.timestamp.astimezone(UTC)
-                if rec.timestamp.tzinfo
-                else rec.timestamp.replace(tzinfo=UTC)
+    for rec in events:
+        try:
+            event_type = EventType(rec.event_type)
+        except ValueError:
+            logger.warning(
+                "Skipping unknown event_type %r in replay (session=%s)",
+                rec.event_type,
+                session_id,
             )
-
-            agent_id = rec.data.get("agent_id") if rec.data else "main"
-            if not agent_id:
-                agent_id = "main"
-            replay_data.append(
+            continue
+        try:
+            evt = EventAdapter.validate_python(
                 {
-                    "event": {
-                        "id": str(rec.timestamp.timestamp()),
-                        "type": rec.event_type,
-                        "agentId": str(agent_id),
-                        "summary": get_event_processor().get_event_summary(evt),
-                        "timestamp": ts_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    },
-                    "state": state.model_dump(mode="json", by_alias=True),
+                    "event_type": event_type,
+                    "session_id": rec.session_id,
+                    "timestamp": rec.timestamp,
+                    "data": rec.data or {},
                 }
             )
+        except ValidationError:
+            # Unknown event_type values reach here too (defensive double
+            # guard alongside the EventType(rec.event_type) try/except).
+            logger.warning(
+                "Skipping event that failed union validation in replay (session=%s, type=%s)",
+                rec.event_type,
+                session_id,
+            )
+            continue
+        sm.transition(evt)
+        state = sm.to_game_state(session_id)
 
-        return replay_data
-    except Exception as e:
-        logger.exception("Error in get_session_replay: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to generate replay") from e
+        ts_utc = (
+            rec.timestamp.astimezone(UTC)
+            if rec.timestamp.tzinfo
+            else rec.timestamp.replace(tzinfo=UTC)
+        )
+
+        agent_id = rec.data.get("agent_id") if rec.data else "main"
+        if not agent_id:
+            agent_id = "main"
+        replay_data.append(
+            {
+                "event": {
+                    "id": str(rec.timestamp.timestamp()),
+                    "type": rec.event_type,
+                    "agentId": str(agent_id),
+                    "summary": get_event_processor().get_event_summary(evt),
+                    "timestamp": ts_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                },
+                "state": state.model_dump(mode="json", by_alias=True),
+            }
+        )
+
+    return replay_data
 
 
 @router.post("/simulate")
@@ -496,56 +496,47 @@ async def trigger_simulation() -> dict[str, str]:
         # so the event loop is not stalled for up to 5 seconds (ARC-003).
         await asyncio.to_thread(kill_simulation)
 
-    try:
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
-        script_path = os.path.join(project_root, "scripts/simulate_events.py")
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
+    script_path = os.path.join(project_root, "scripts/simulate_events.py")
 
-        _simulation_process = subprocess.Popen(
-            ["uv", "run", "python", script_path],
-            cwd=project_root,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+    _simulation_process = subprocess.Popen(
+        ["uv", "run", "python", script_path],
+        cwd=project_root,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
-        return {"status": "success", "message": "Simulation started in background"}
-    except Exception as e:
-        logger.exception("Error in trigger_simulation: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to start simulation") from e
+    return {"status": "success", "message": "Simulation started in background"}
 
 
 @router.delete("")
 async def clear_database(db: Annotated[AsyncSession, Depends(get_db)]) -> dict[str, str]:
     """Clear all sessions and events from the database."""
-    try:
-        # Offload the blocking terminate()+wait(timeout=5) to a worker thread
-        # so the event loop is not stalled for up to 5 seconds (ARC-003).
-        simulation_killed = await asyncio.to_thread(kill_simulation)
+    # Offload the blocking terminate()+wait(timeout=5) to a worker thread
+    # so the event loop is not stalled for up to 5 seconds (ARC-003).
+    simulation_killed = await asyncio.to_thread(kill_simulation)
 
-        # Preserve building/floor configuration while clearing everything else.
-        await db.execute(delete(UserPreference).where(UserPreference.key != "building_config"))
-        await db.execute(delete(TaskRecord))
-        await db.execute(delete(EventRecord))
-        await db.execute(delete(SessionRecord))
-        await db.commit()
+    # Preserve building/floor configuration while clearing everything else.
+    await db.execute(delete(UserPreference).where(UserPreference.key != "building_config"))
+    await db.execute(delete(TaskRecord))
+    await db.execute(delete(EventRecord))
+    await db.execute(delete(SessionRecord))
+    await db.commit()
 
-        # Re-invalidate cached building config in case other preferences changed.
-        from app.core.floor_config import invalidate_building_config
+    # Re-invalidate cached building config in case other preferences changed.
+    from app.core.floor_config import invalidate_building_config
 
-        invalidate_building_config()
+    invalidate_building_config()
 
-        await get_event_processor().clear_all_sessions()
-        git_service.clear()
+    await get_event_processor().clear_all_sessions()
+    git_service.clear()
 
-        await get_manager().broadcast_all({"type": "reload", "timestamp": ""})
+    await get_manager().broadcast_all({"type": "reload", "timestamp": ""})
 
-        message = "Database and memory cleared"
-        if simulation_killed:
-            message += " (simulation stopped)"
-        return {"status": "success", "message": message}
-    except Exception as e:
-        await db.rollback()
-        logger.exception("Error in clear_database: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to clear database") from e
+    message = "Database and memory cleared"
+    if simulation_killed:
+        message += " (simulation stopped)"
+    return {"status": "success", "message": message}
 
 
 @router.delete("/{session_id}")
@@ -562,35 +553,28 @@ async def delete_session(
         A status payload confirming deletion.
 
     Raises:
-        HTTPException: If the session is not found or deletion fails.
+        HTTPException: 404 if the session is not found. Any other failure
+        propagates to the app-level exception handler (ARC-024).
     """
-    try:
-        result = await db.execute(select(SessionRecord).where(SessionRecord.id == session_id))
-        session = result.scalar_one_or_none()
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
+    result = await db.execute(select(SessionRecord).where(SessionRecord.id == session_id))
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-        await db.execute(delete(TaskRecord).where(TaskRecord.session_id == session_id))
-        await db.execute(delete(EventRecord).where(EventRecord.session_id == session_id))
-        await db.execute(delete(SessionRecord).where(SessionRecord.id == session_id))
-        await db.commit()
+    await db.execute(delete(TaskRecord).where(TaskRecord.session_id == session_id))
+    await db.execute(delete(EventRecord).where(EventRecord.session_id == session_id))
+    await db.execute(delete(SessionRecord).where(SessionRecord.id == session_id))
+    await db.commit()
 
-        await get_event_processor().remove_session(session_id)
+    await get_event_processor().remove_session(session_id)
 
-        # Broadcast session deletion to all connected clients
-        await get_manager().broadcast_all(
-            {
-                "type": "session_deleted",
-                "session_id": session_id,
-                "timestamp": "",
-            }
-        )
+    # Broadcast session deletion to all connected clients
+    await get_manager().broadcast_all(
+        {
+            "type": "session_deleted",
+            "session_id": session_id,
+            "timestamp": "",
+        }
+    )
 
-        return {"status": "success", "message": f"Session {session_id} deleted"}
-    except HTTPException:
-        await db.rollback()
-        raise
-    except Exception as e:
-        await db.rollback()
-        logger.exception("Error in delete_session: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to delete session") from e
+    return {"status": "success", "message": f"Session {session_id} deleted"}

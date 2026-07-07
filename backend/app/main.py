@@ -243,6 +243,20 @@ app.include_router(preferences.router, prefix=f"{settings.API_V1_STR}")
 app.include_router(sessions.router, prefix=f"{settings.API_V1_STR}")
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all for unhandled route exceptions.
+
+    Logs the traceback with the request context and returns a generic 500
+    response so route handlers no longer need a copy-pasted
+    ``except Exception -> logger.exception -> raise HTTPException(500)``
+    tail (ARC-024). ``HTTPException`` is handled by FastAPI's default
+    handler and never reaches this code path.
+    """
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
 @app.get("/health")
 async def health_check() -> dict[str, str]:
     return {"status": "ok"}

@@ -38,17 +38,22 @@ class ConnectionManager:
         self,
         message: dict[str, Any],
         connections: list[WebSocket],
-        connection_map: dict[str, list[WebSocket]],
-        group_key: str,
-    ) -> None:
-        """Send a message to a list of WebSocket connections and prune failures.
+        *,
+        label: str = "session",
+    ) -> list[WebSocket]:
+        """Send a message to a list of WebSocket connections.
 
         Args:
             message: JSON-serializable payload to send.
             connections: Snapshot of connections to iterate.
-            connection_map: The master dict (``active_connections`` or
-                ``room_connections``) to prune dead sockets from.
-            group_key: The key within *connection_map* to clean up.
+            label: Context label included in failure log lines
+                (e.g. session id, ``"overview"``, ``"all"``).
+
+        Returns:
+            The connections whose ``send_json`` call failed. The caller is
+            responsible for pruning them from its own data structures so the
+            helper stays agnostic of whether connections are grouped by
+            session, room, or stored in a flat list (QA-015).
         """
         failed: list[WebSocket] = []
         for connection in connections:
@@ -56,18 +61,9 @@ class ConnectionManager:
                 if connection.client_state == WebSocketState.CONNECTED:
                     await connection.send_json(message)
             except Exception as e:
-                logger.warning("Failed to send to WebSocket (%s): %s", group_key, e)
+                logger.warning("Failed to send to WebSocket (%s): %s", label, e)
                 failed.append(connection)
-
-        if failed:
-            async with self._lock:
-                group = connection_map.get(group_key)
-                if group:
-                    for conn in failed:
-                        if conn in group:
-                            group.remove(conn)
-                    if not group:
-                        del connection_map[group_key]
+        return failed
 
     # ------------------------------------------------------------------
     # Session-level operations
@@ -98,9 +94,16 @@ class ConnectionManager:
         if not connections:
             return
 
-        await self._broadcast_to_connections(
-            message, connections, self.active_connections, session_id
-        )
+        failed = await self._broadcast_to_connections(message, connections, label=session_id)
+        if failed:
+            async with self._lock:
+                group = self.active_connections.get(session_id)
+                if group:
+                    for conn in failed:
+                        if conn in group:
+                            group.remove(conn)
+                    if not group:
+                        del self.active_connections[session_id]
 
     async def send_personal_message(self, message: dict[str, Any], websocket: WebSocket) -> None:
         """Send a message to a specific WebSocket connection."""
@@ -121,24 +124,18 @@ class ConnectionManager:
         if not all_connections:
             return
 
-        failed_connections: list[tuple[str, WebSocket]] = []
-        for session_id, connection in all_connections:
-            try:
-                if connection.client_state == WebSocketState.CONNECTED:
-                    await connection.send_json(message)
-            except Exception as e:
-                logger.warning("Failed to broadcast to WebSocket: %s", e)
-                failed_connections.append((session_id, connection))
-
-        if failed_connections:
+        failed = await self._broadcast_to_connections(
+            message, [conn for _, conn in all_connections], label="all"
+        )
+        if failed:
+            failed_ids = {id(conn) for conn in failed}
             async with self._lock:
-                for session_id, conn in failed_connections:
-                    group = self.active_connections.get(session_id)
-                    if group:
-                        if conn in group:
-                            group.remove(conn)
-                        if not group:
-                            del self.active_connections[session_id]
+                for session_id, conns in list(self.active_connections.items()):
+                    pruned = [c for c in conns if id(c) not in failed_ids]
+                    if pruned:
+                        self.active_connections[session_id] = pruned
+                    elif session_id in self.active_connections:
+                        del self.active_connections[session_id]
 
     # ------------------------------------------------------------------
     # Room-level WebSocket support
@@ -169,7 +166,16 @@ class ConnectionManager:
         if not connections:
             return
 
-        await self._broadcast_to_connections(message, connections, self.room_connections, room_id)
+        failed = await self._broadcast_to_connections(message, connections, label=room_id)
+        if failed:
+            async with self._lock:
+                group = self.room_connections.get(room_id)
+                if group:
+                    for conn in failed:
+                        if conn in group:
+                            group.remove(conn)
+                    if not group:
+                        del self.room_connections[room_id]
 
     # ------------------------------------------------------------------
     # Overview-level WebSocket support (Command Center — cross-session)
@@ -204,20 +210,13 @@ class ConnectionManager:
         if not connections:
             return
 
-        failed: list[WebSocket] = []
-        for connection in connections:
-            try:
-                if connection.client_state == WebSocketState.CONNECTED:
-                    await connection.send_json(message)
-            except Exception as e:
-                logger.warning("Failed to send to overview WebSocket: %s", e)
-                failed.append(connection)
-
+        failed = await self._broadcast_to_connections(message, connections, label="overview")
         if failed:
+            failed_ids = {id(conn) for conn in failed}
             async with self._lock:
-                for conn in failed:
-                    if conn in self.overview_connections:
-                        self.overview_connections.remove(conn)
+                self.overview_connections[:] = [
+                    conn for conn in self.overview_connections if id(conn) not in failed_ids
+                ]
 
 
 manager = ConnectionManager()
