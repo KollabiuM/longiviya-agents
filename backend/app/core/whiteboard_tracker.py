@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
 
-from app.models.events import Event
+from app.models.events import ToolEvent
 from app.models.sessions import AgentLifespan, BackgroundTask, NewsItem
 
 logger = logging.getLogger(__name__)
@@ -136,11 +136,8 @@ class WhiteboardTracker:
         """Return the broad category for a tool name (used by pizza chart)."""
         return TOOL_CATEGORIES.get(tool_name, "other")
 
-    def track_tool_use(self, event: Event) -> None:
+    def track_tool_use(self, event: ToolEvent) -> None:
         """Update tool usage statistics from a POST_TOOL_USE event."""
-        if not event.data:
-            return
-
         tool_name = event.data.tool_name or "unknown"
         tool_input: dict[str, str | int | bool | list[str] | None] = event.data.tool_input or {}
         success = event.data.success

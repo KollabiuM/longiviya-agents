@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.core.event_processor import event_processor
 from app.main import app
-from app.models.events import Event, EventData, EventType
+from app.models.events import EventAdapter, EventType
 
 client = TestClient(app)
 
@@ -26,11 +26,13 @@ def _auth_headers() -> dict[str, str]:
 def _seed_session(session_id: str | None = None) -> str:
     """Create a session via the event pipeline and return its ID."""
     sid = session_id or f"test-{uuid4()}"
-    event = Event(
-        event_type=EventType.SESSION_START,
-        session_id=sid,
-        timestamp=datetime.now(UTC),
-        data=EventData(),
+    event = EventAdapter.validate_python(
+        {
+            "event_type": EventType.SESSION_START,
+            "session_id": sid,
+            "timestamp": datetime.now(UTC),
+            "data": {},
+        }
     )
     asyncio.run(event_processor.process_event(event))
     return sid

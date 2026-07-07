@@ -293,13 +293,15 @@ class TestTokenTrackerPathConfinement:
     def test_token_usage_slow_path_rejects_outside_path(self) -> None:
         """update_from_event's JSONL fallback must not read an out-of-confine path."""
         from app.core.token_tracker import TokenTracker
-        from app.models.events import Event, EventData, EventType
+        from app.models.events import EventAdapter, EventType
 
         tracker = TokenTracker()
-        event = Event(
-            event_type=EventType.STOP,
-            session_id="test",
-            data=EventData(transcript_path="/etc/hostname"),
+        event = EventAdapter.validate_python(
+            {
+                "event_type": EventType.STOP,
+                "session_id": "test",
+                "data": {"transcript_path": "/etc/hostname"},
+            }
         )
         tracker.update_from_event(event)
         assert tracker.total_input_tokens == 0

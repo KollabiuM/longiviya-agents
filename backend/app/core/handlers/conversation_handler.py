@@ -16,7 +16,7 @@ from app.core.path_utils import is_safe_transcript_path
 from app.core.state_machine import StateMachine
 from app.core.summary_service import get_summary_service
 from app.models.common import BubbleContent, BubbleType
-from app.models.events import Event
+from app.models.events import LifecycleEvent, PromptEvent
 from app.models.sessions import ConversationEntry
 
 __all__ = [
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 async def handle_user_prompt_submit(
     sm: StateMachine,
-    event: Event,
+    event: PromptEvent,
     agent_id: str,
 ) -> None:
     """Handle a USER_PROMPT_SUBMIT event.
@@ -44,7 +44,7 @@ async def handle_user_prompt_submit(
         event: The USER_PROMPT_SUBMIT event.
         agent_id: The resolved agent ID (``"main"`` for the boss).
     """
-    if not (event.data and event.data.prompt):
+    if not event.data.prompt:
         return
 
     summary_service = get_summary_service()
@@ -67,7 +67,7 @@ async def handle_user_prompt_submit(
 
 async def handle_stop(
     sm: StateMachine,
-    event: Event,
+    event: LifecycleEvent,
     agent_id: str,
 ) -> None:
     """Handle a STOP event.
@@ -81,9 +81,6 @@ async def handle_stop(
         event: The STOP event.
         agent_id: The resolved agent ID (``"main"`` for the boss).
     """
-    if not event.data:
-        return
-
     logger.info(
         f"STOP event: boss_bubble before extract = "
         f"{sm.boss_bubble.text[:50] if sm.boss_bubble else 'None'}..."

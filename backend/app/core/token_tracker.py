@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from app.core.path_utils import is_safe_transcript_path
-from app.models.events import Event
+from app.models.events import AnyEvent
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ class TokenTracker:
             else 0.0
         )
 
-    def update_from_event(self, event: Event) -> None:
+    def update_from_event(self, event: AnyEvent) -> None:
         """Update token counts from an incoming event.
 
         Checks event data first (fast path), then falls back to JSONL

@@ -5,7 +5,7 @@ from app.core.room_orchestrator import RoomOrchestrator, build_overview
 from app.core.state_machine import StateMachine
 from app.models.agents import Agent, AgentState, BossState
 from app.models.common import TodoItem, TodoStatus
-from app.models.events import Event, EventData, EventType
+from app.models.events import AnyEvent, EventAdapter, EventType
 
 
 def _make_sm(
@@ -20,19 +20,23 @@ def _make_sm(
     return sm
 
 
-def _task_created(task_id: str, subject: str) -> Event:
-    return Event(
-        event_type=EventType.TASK_CREATED,
-        session_id="s",
-        data=EventData(task_id=task_id, task_subject=subject),
+def _task_created(task_id: str, subject: str) -> AnyEvent:
+    return EventAdapter.validate_python(
+        {
+            "event_type": EventType.TASK_CREATED,
+            "session_id": "s",
+            "data": {"task_id": task_id, "task_subject": subject},
+        }
     )
 
 
-def _task_completed(task_id: str) -> Event:
-    return Event(
-        event_type=EventType.TASK_COMPLETED,
-        session_id="s",
-        data=EventData(task_id=task_id),
+def _task_completed(task_id: str) -> AnyEvent:
+    return EventAdapter.validate_python(
+        {
+            "event_type": EventType.TASK_COMPLETED,
+            "session_id": "s",
+            "data": {"task_id": task_id},
+        }
     )
 
 

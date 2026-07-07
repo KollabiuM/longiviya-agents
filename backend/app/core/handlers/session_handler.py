@@ -14,7 +14,7 @@ from pathlib import Path
 from app.core.broadcast_service import broadcast_state
 from app.core.state_machine import StateMachine
 from app.core.task_file_poller import get_task_file_poller
-from app.models.events import Event, EventType
+from app.models.events import AnyEvent, EventType, SessionEvent
 
 __all__ = [
     "handle_session_start",
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 async def handle_session_start(
     sm: StateMachine,
-    event: Event,
+    event: SessionEvent,
     ensure_task_file_poller_fn: EnsurePollFn,
 ) -> None:
     """Handle a SESSION_START event.
@@ -43,14 +43,14 @@ async def handle_session_start(
     ensure_task_file_poller_fn()
     task_poller = get_task_file_poller()
     if task_poller:
-        task_list_id = event.data.task_list_id if event.data else None
+        task_list_id = event.data.task_list_id
         await task_poller.start_polling(event.session_id, task_list_id=task_list_id)
     await broadcast_state(event.session_id, sm)
 
 
 async def handle_session_end(
     sm: StateMachine,
-    event: Event,
+    event: SessionEvent,
 ) -> None:
     """Handle a SESSION_END event.
 
@@ -68,7 +68,7 @@ async def handle_session_end(
 
 async def ensure_task_poller_running(
     sm: StateMachine,
-    event: Event,
+    event: AnyEvent,
     ensure_task_file_poller_fn: EnsurePollFn,
     derive_task_list_id_fn: DeriveTaskListIdFn,
 ) -> None:
@@ -91,7 +91,7 @@ async def ensure_task_poller_running(
     ensure_task_file_poller_fn()
     task_poller = get_task_file_poller()
     if task_poller and not await task_poller.is_polling(event.session_id):
-        task_list_id = event.data.task_list_id if event.data else None
+        task_list_id = event.data.task_list_id
         if not task_list_id:
             task_list_id = await derive_task_list_id_fn(event.session_id)
         await task_poller.start_polling(event.session_id, task_list_id=task_list_id)

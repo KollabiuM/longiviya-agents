@@ -12,7 +12,14 @@ from typing import Any, cast
 from app.config import get_settings
 from app.core.path_utils import is_safe_transcript_path
 from app.models.common import BubbleContent, BubbleType
-from app.models.events import Event, EventData, EventType
+from app.models.events import (
+    AgentEvent,
+    AgentEventData,
+    AnyEvent,
+    EventType,
+    ToolEvent,
+    ToolEventData,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -174,21 +181,21 @@ class TranscriptPoller:
         except Exception as e:
             logger.exception(f"Error in poll loop for agent {agent_id}: {e}")
 
-    def _build_zombie_stop_event(self, agent: "PolledAgent") -> Event:
+    def _build_zombie_stop_event(self, agent: "PolledAgent") -> AgentEvent:
         """Build a synthetic SUBAGENT_STOP for an agent we believe has crashed."""
-        return Event(
+        return AgentEvent(
             event_type=EventType.SUBAGENT_STOP,
             session_id=agent.session_id,
             timestamp=datetime.now(UTC),
-            data=EventData(
+            data=AgentEventData(
                 agent_id=agent.agent_id,
                 agent_transcript_path=str(agent.transcript_path),
             ),
         )
 
-    async def _read_new_content(self, agent: PolledAgent) -> list[Event]:
+    async def _read_new_content(self, agent: PolledAgent) -> list[AnyEvent]:
         """Read new content from the transcript file and extract events."""
-        events: list[Event] = []
+        events: list[AnyEvent] = []
 
         if not agent.transcript_path.exists():
             return events
@@ -226,9 +233,9 @@ class TranscriptPoller:
 
         return events
 
-    def _parse_content(self, agent: PolledAgent, content: str) -> list[Event]:
+    def _parse_content(self, agent: PolledAgent, content: str) -> list[AnyEvent]:
         """Parse JSONL content and extract tool use, thinking, and text events."""
-        events: list[Event] = []
+        events: list[AnyEvent] = []
 
         for line in content.split("\n"):
             line = line.strip()
@@ -293,7 +300,9 @@ class TranscriptPoller:
 
         return events
 
-    def _create_pre_tool_use_event(self, agent: PolledAgent, block: dict[str, Any]) -> Event | None:
+    def _create_pre_tool_use_event(
+        self, agent: PolledAgent, block: dict[str, Any]
+    ) -> ToolEvent | None:
         """Create a pre_tool_use event from a tool_use block."""
         tool_name = block.get("name")
         if not tool_name:
@@ -305,11 +314,11 @@ class TranscriptPoller:
         tool_input = block.get("input", {})
         tool_use_id = block.get("id", "")
 
-        return Event(
+        return ToolEvent(
             event_type=EventType.PRE_TOOL_USE,
             session_id=agent.session_id,
             timestamp=datetime.now(UTC),
-            data=EventData(
+            data=ToolEventData(
                 agent_id=agent.agent_id,
                 tool_name=tool_name,
                 tool_input=tool_input,
@@ -319,34 +328,34 @@ class TranscriptPoller:
 
     def _create_post_tool_use_event(
         self, agent: PolledAgent, block: dict[str, Any]
-    ) -> Event | None:
+    ) -> ToolEvent | None:
         """Create a post_tool_use event from a tool_result block."""
         tool_use_id = block.get("tool_use_id", "")
         is_error = block.get("is_error", False)
 
-        return Event(
+        return ToolEvent(
             event_type=EventType.POST_TOOL_USE,
             session_id=agent.session_id,
             timestamp=datetime.now(UTC),
-            data=EventData(
+            data=ToolEventData(
                 agent_id=agent.agent_id,
                 tool_use_id=tool_use_id,
                 success=not is_error,
             ),
         )
 
-    def _create_thinking_event(self, agent: PolledAgent, thinking_text: str) -> Event:
+    def _create_thinking_event(self, agent: PolledAgent, thinking_text: str) -> AgentEvent:
         """Create an agent update event for thinking content."""
         max_length = 200
         display_text = thinking_text.replace("\n", " ").strip()
         if len(display_text) > max_length:
             display_text = display_text[: max_length - 3] + "..."
 
-        return Event(
+        return AgentEvent(
             event_type=EventType.AGENT_UPDATE,
             session_id=agent.session_id,
             timestamp=datetime.now(UTC),
-            data=EventData(
+            data=AgentEventData(
                 agent_id=agent.agent_id,
                 thinking=thinking_text,
                 bubble_content=BubbleContent(
@@ -357,18 +366,18 @@ class TranscriptPoller:
             ),
         )
 
-    def _create_text_event(self, agent: PolledAgent, text_content: str) -> Event:
+    def _create_text_event(self, agent: PolledAgent, text_content: str) -> AgentEvent:
         """Create an agent update event for text response."""
         max_length = 200
         display_text = text_content.replace("\n", " ").strip()
         if len(display_text) > max_length:
             display_text = display_text[: max_length - 3] + "..."
 
-        return Event(
+        return AgentEvent(
             event_type=EventType.AGENT_UPDATE,
             session_id=agent.session_id,
             timestamp=datetime.now(UTC),
-            data=EventData(
+            data=AgentEventData(
                 agent_id=agent.agent_id,
                 summary=text_content,
                 bubble_content=BubbleContent(

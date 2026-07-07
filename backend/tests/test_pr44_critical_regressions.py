@@ -29,7 +29,7 @@ from app.core.token_tracker import TokenTracker
 from app.core.transcript_poller import TranscriptPoller
 from app.db.database import AsyncSessionLocal, Base, override_engine
 from app.db.models import EventRecord, SessionRecord
-from app.models.events import Event, EventData, EventType
+from app.models.events import EventAdapter, EventType
 from app.models.git import GitStatus
 from app.services.git_service import GitService
 
@@ -133,10 +133,12 @@ async def test_concurrent_events_share_one_state_machine() -> None:
     count = 20
 
     events = [
-        Event(
-            event_type=EventType.USER_PROMPT_SUBMIT,
-            session_id=session_id,
-            data=EventData(prompt=f"prompt number {i}", project_name="app"),
+        EventAdapter.validate_python(
+            {
+                "event_type": EventType.USER_PROMPT_SUBMIT,
+                "session_id": session_id,
+                "data": {"prompt": f"prompt number {i}", "project_name": "app"},
+            }
         )
         for i in range(count)
     ]

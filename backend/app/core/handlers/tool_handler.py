@@ -9,7 +9,7 @@ import logging
 
 from app.core.broadcast_service import broadcast_state
 from app.core.state_machine import StateMachine
-from app.models.events import Event
+from app.models.events import ToolEvent
 from app.models.sessions import ConversationEntry
 
 __all__ = [
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 async def handle_pre_tool_use(
     sm: StateMachine,
-    event: Event,
+    event: ToolEvent,
     agent_id: str,
     event_summary: str,
 ) -> None:
@@ -36,9 +36,6 @@ async def handle_pre_tool_use(
         agent_id: The resolved agent ID (``"main"`` for the boss).
         event_summary: Human-readable summary already computed by the router.
     """
-    if not event.data:
-        return
-
     ts = event.timestamp.isoformat()
     aid = agent_id or "main"
 

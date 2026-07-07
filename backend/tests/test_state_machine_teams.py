@@ -5,11 +5,13 @@ from typing import Any
 from app.core.state_machine import StateMachine
 from app.models.agents import BossState
 from app.models.common import BubbleContent, BubbleType
-from app.models.events import Event, EventData, EventType
+from app.models.events import AnyEvent, EventAdapter, EventType
 
 
-def _make_event(event_type: EventType, **kwargs: Any) -> Event:
-    return Event(event_type=event_type, session_id="s1", data=EventData(**kwargs))
+def _make_event(event_type: EventType, **kwargs: Any) -> AnyEvent:
+    return EventAdapter.validate_python(
+        {"event_type": event_type, "session_id": "s1", "data": kwargs}
+    )
 
 
 class TestStateMachineTeamFields:

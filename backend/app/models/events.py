@@ -225,7 +225,9 @@ class AgentEventData(EventDataBase):
     """Payload for SUBAGENT_START, SUBAGENT_INFO, SUBAGENT_STOP, AGENT_UPDATE, CLEANUP.
 
     Note: `agent_transcript_path` is inherited from EventDataBase because
-    token_tracker.update_from_event reads it on any event type.
+    token_tracker.update_from_event reads it on any event type. `success`
+    appears here (and on ToolEventData) because the SUBAGENT_STOP formatter
+    reads it for the native-hook success/failure marker.
     """
 
     agent_name: str | None = None
@@ -234,6 +236,7 @@ class AgentEventData(EventDataBase):
     result_summary: str | None = None
     tool_use_id: str | None = None
     thinking: str | None = None
+    success: bool | None = None
     bubble_content: BubbleContent | None = None
     speech_content: SpeechContent | None = None
 

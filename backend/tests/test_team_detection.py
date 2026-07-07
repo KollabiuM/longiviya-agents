@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.event_processor import EventProcessor
 from app.db.database import Base, override_engine
-from app.models.events import Event, EventData, EventType
+from app.models.events import AnyEvent, EventAdapter, EventType
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -32,11 +32,9 @@ def ensure_test_db() -> None:
     override_engine(engine)
 
 
-def _make_event(event_type: EventType, session_id: str = "s1", **kwargs: Any) -> Event:
-    return Event(
-        event_type=event_type,
-        session_id=session_id,
-        data=EventData(**kwargs),
+def _make_event(event_type: EventType, session_id: str = "s1", **kwargs: Any) -> AnyEvent:
+    return EventAdapter.validate_python(
+        {"event_type": event_type, "session_id": session_id, "data": kwargs}
     )
 
 

@@ -419,8 +419,10 @@ async def get_session_replay(
         result = await db.execute(stmt)
         events = result.scalars().all()
 
+        from pydantic import ValidationError
+
         from app.core.state_machine import StateMachine
-        from app.models.events import Event, EventData, EventType
+        from app.models.events import EventAdapter, EventType
 
         sm = StateMachine()
         replay_data: list[ReplayEntry] = []
@@ -435,12 +437,24 @@ async def get_session_replay(
                     session_id,
                 )
                 continue
-            evt = Event(
-                event_type=event_type,
-                session_id=rec.session_id,
-                timestamp=rec.timestamp,
-                data=EventData.model_validate(rec.data),
-            )
+            try:
+                evt = EventAdapter.validate_python(
+                    {
+                        "event_type": event_type,
+                        "session_id": rec.session_id,
+                        "timestamp": rec.timestamp,
+                        "data": rec.data or {},
+                    }
+                )
+            except ValidationError:
+                # Unknown event_type values reach here too (defensive double
+                # guard alongside the EventType(rec.event_type) try/except).
+                logger.warning(
+                    "Skipping event that failed union validation in replay (session=%s, type=%s)",
+                    rec.event_type,
+                    session_id,
+                )
+                continue
             sm.transition(evt)
             state = sm.to_game_state(session_id)
 

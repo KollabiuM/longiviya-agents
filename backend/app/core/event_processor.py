@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -57,7 +58,18 @@ from app.db.database import AsyncSessionLocal
 from app.db.models import EventRecord, SessionRecord
 from app.models.agents import AgentState
 from app.models.common import TodoItem
-from app.models.events import Event, EventData, EventType
+from app.models.events import (
+    AgentEvent,
+    AnyEvent,
+    BackgroundTaskEvent,
+    EventAdapter,
+    EventDataBase,
+    EventType,
+    LifecycleEvent,
+    PromptEvent,
+    TaskEvent,
+    ToolEvent,
+)
 from app.models.overview import OverviewState
 from app.models.sessions import ConversationEntry, GameState, HistoryEntry
 from app.services.git_service import git_service
@@ -194,7 +206,7 @@ class EventProcessor:
         # only one entry fires per event (events have a single type), so the
         # relative order of entries here is not behaviourally significant.
         self._post_broadcast_enrichers: dict[
-            EventType, Callable[[StateMachine, Event, str], Awaitable[None]]
+            EventType, Callable[[StateMachine, AnyEvent, str], Awaitable[None]]
         ] = {
             EventType.SUBAGENT_START: self._enrich_subagent_start,
             EventType.SUBAGENT_INFO: self._enrich_subagent_info,
@@ -268,11 +280,13 @@ class EventProcessor:
         await save_tasks(session_id, todos)
         await broadcast_state(session_id, sm)
 
-    async def _handle_polled_event(self, event: Event) -> None:
+    async def _handle_polled_event(self, event: AnyEvent) -> None:
         """Handle events extracted from polled subagent transcripts."""
+        # tool_name is family-specific (ToolEvent); getattr keeps this log line
+        # safe for non-tool polled events (AgentEvent thinking/text updates).
+        tool_name = getattr(event.data, "tool_name", None)
         logger.debug(
-            f"Polled event: {event.event_type} agent={event.data.agent_id} "
-            f"tool={event.data.tool_name}"
+            f"Polled event: {event.event_type} agent={event.data.agent_id} tool={tool_name}"
         )
         await self._process_event_internal(event)
 
@@ -331,7 +345,7 @@ class EventProcessor:
     # Public event ingestion
     # ------------------------------------------------------------------
 
-    async def process_event(self, event: Event) -> None:
+    async def process_event(self, event: AnyEvent) -> None:
         """Process an incoming event and update session state.
 
         Delegates to :meth:`_process_event_internal` for the actual routing.
@@ -369,7 +383,10 @@ class EventProcessor:
     # ``self._post_broadcast_enrichers`` for the single source of truth.
     # ------------------------------------------------------------------
 
-    async def _enrich_subagent_start(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+    async def _enrich_subagent_start(
+        self, sm: StateMachine, event: AnyEvent, agent_id: str
+    ) -> None:
+        assert isinstance(event, AgentEvent), "dispatch routes SUBAGENT_START only"
         await handle_subagent_start(
             sm,
             event,
@@ -377,40 +394,51 @@ class EventProcessor:
             self._update_agent_state,
         )
 
-    async def _enrich_subagent_info(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+    async def _enrich_subagent_info(self, sm: StateMachine, event: AnyEvent, agent_id: str) -> None:
+        assert isinstance(event, AgentEvent), "dispatch routes SUBAGENT_INFO only"
         await handle_subagent_info(sm, event, self._ensure_transcript_poller)
 
-    async def _enrich_agent_update(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+    async def _enrich_agent_update(self, sm: StateMachine, event: AnyEvent, agent_id: str) -> None:
+        assert isinstance(event, AgentEvent), "dispatch routes AGENT_UPDATE only"
         await handle_agent_update(sm, event)
 
-    async def _enrich_subagent_stop(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+    async def _enrich_subagent_stop(self, sm: StateMachine, event: AnyEvent, agent_id: str) -> None:
+        assert isinstance(event, AgentEvent), "dispatch routes SUBAGENT_STOP only"
         await handle_subagent_stop(sm, event, self._persist_synthetic_event)
 
-    async def _enrich_stop(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+    async def _enrich_stop(self, sm: StateMachine, event: AnyEvent, agent_id: str) -> None:
+        assert isinstance(event, LifecycleEvent), "dispatch routes STOP only"
         await handle_stop(sm, event, agent_id)
 
     async def _enrich_user_prompt_submit(
-        self, sm: StateMachine, event: Event, agent_id: str
+        self, sm: StateMachine, event: AnyEvent, agent_id: str
     ) -> None:
+        assert isinstance(event, PromptEvent), "dispatch routes USER_PROMPT_SUBMIT only"
         await handle_user_prompt_submit(sm, event, agent_id)
 
-    async def _enrich_pre_tool_use(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+    async def _enrich_pre_tool_use(self, sm: StateMachine, event: AnyEvent, agent_id: str) -> None:
+        assert isinstance(event, ToolEvent), "dispatch routes PRE_TOOL_USE only"
         await handle_pre_tool_use(sm, event, agent_id, self._get_event_summary(event))
 
-    async def _enrich_task_created(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+    async def _enrich_task_created(self, sm: StateMachine, event: AnyEvent, agent_id: str) -> None:
+        assert isinstance(event, TaskEvent), "dispatch routes TASK_CREATED only"
         await handle_task_created(sm, event)
 
-    async def _enrich_task_completed(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+    async def _enrich_task_completed(
+        self, sm: StateMachine, event: AnyEvent, agent_id: str
+    ) -> None:
+        assert isinstance(event, TaskEvent), "dispatch routes TASK_COMPLETED only"
         await handle_task_completed(sm, event)
 
-    async def _enrich_teammate_idle(self, sm: StateMachine, event: Event, agent_id: str) -> None:
+    async def _enrich_teammate_idle(self, sm: StateMachine, event: AnyEvent, agent_id: str) -> None:
+        assert isinstance(event, LifecycleEvent), "dispatch routes TEAMMATE_IDLE only"
         await handle_teammate_idle(sm, event)
 
     # ------------------------------------------------------------------
     # Internal routing
     # ------------------------------------------------------------------
 
-    async def _process_event_internal(self, event: Event) -> None:
+    async def _process_event_internal(self, event: AnyEvent) -> None:
         """Persist event, update state machine, build history, and delegate to handlers.
 
         This is the core processing pipeline:
@@ -647,7 +675,7 @@ class EventProcessor:
     # ------------------------------------------------------------------
 
     async def _persist_synthetic_event(
-        self, session_id: str, event_type: EventType, data: EventData | dict[str, Any] | None
+        self, session_id: str, event_type: EventType, data: EventDataBase | dict[str, Any] | None
     ) -> None:
         """Save an intermediate lifecycle event to the DB for replay fidelity.
 
@@ -657,12 +685,12 @@ class EventProcessor:
         Args:
             session_id: The session the event belongs to.
             event_type: The type of event to persist.
-            data: Event payload (EventData, raw dict, or None).
+            data: Event payload (family payload instance, raw dict, or None).
         """
         payload: dict[str, Any]
         if data is None:
             payload = {}
-        elif isinstance(data, EventData):
+        elif isinstance(data, EventDataBase):
             payload = data.model_dump()
         else:
             payload = data
@@ -705,12 +733,23 @@ class EventProcessor:
             skipped_count = 0
             for rec in events:
                 try:
-                    evt = Event(
-                        event_type=EventType(rec.event_type),
-                        session_id=rec.session_id,
-                        timestamp=rec.timestamp,
-                        data=EventData.model_validate(rec.data) if rec.data else EventData(),
-                    )
+                    try:
+                        evt = EventAdapter.validate_python(
+                            {
+                                "event_type": EventType(rec.event_type),
+                                "session_id": rec.session_id,
+                                "timestamp": rec.timestamp,
+                                "data": rec.data or {},
+                            }
+                        )
+                    except ValidationError:
+                        skipped_count += 1
+                        logger.warning(
+                            "Skipping unparseable event in restore (session=%s, type=%r)",
+                            session_id,
+                            rec.event_type,
+                        )
+                        continue
                     sm.transition(evt)
 
                     agent_id = evt.data.agent_id if evt.data and evt.data.agent_id else "main"
@@ -825,7 +864,7 @@ class EventProcessor:
 
     async def _persist_event(
         self,
-        event: Event,
+        event: AnyEvent,
         floor_id: str | None = None,
         room_id: str | None = None,
     ) -> None:
@@ -1012,7 +1051,7 @@ class EventProcessor:
     # Event summary (used by replay endpoint and history building)
     # ------------------------------------------------------------------
 
-    def get_event_summary(self, event: Event) -> str:
+    def get_event_summary(self, event: AnyEvent) -> str:
         """Generate a human-readable summary for an event.
 
         Public wrapper around :meth:`_get_event_summary` for use by
@@ -1026,7 +1065,7 @@ class EventProcessor:
         """
         return self._get_event_summary(event)
 
-    def _get_event_summary(self, event: Event) -> str:
+    def _get_event_summary(self, event: AnyEvent) -> str:
         """Generate a human-readable one-line summary for the event log.
 
         Dispatches on ``event.event_type`` to produce a contextual summary
@@ -1038,81 +1077,108 @@ class EventProcessor:
         Returns:
             A human-readable summary string.
         """
-        if not event.data:
-            return f"{event.event_type} event received"
-
-        data = event.data
+        # `event.data` on the discriminated union is always present (required
+        # field). Each case narrows `event` to its family variant via assert,
+        # which also narrows `event.data` to the matching payload class so
+        # family-specific fields (tool_name, prompt, task_id, ...) typecheck.
         match event.event_type:
             case EventType.SESSION_START:
                 return "Claude Office session started"
             case EventType.SESSION_END:
                 return "Claude Office session ended"
             case EventType.PRE_TOOL_USE:
-                tool = data.tool_name or "Unknown tool"
+                assert isinstance(event, ToolEvent)
+                tool = event.data.tool_name or "Unknown tool"
                 target = ""
-                if data.tool_input:
+                if event.data.tool_input:
                     target = (
-                        data.tool_input.get("file_path") or data.tool_input.get("command") or ""
+                        event.data.tool_input.get("file_path")
+                        or event.data.tool_input.get("command")
+                        or ""
                     )
                     if len(target) > 30:
                         target = f"...{target[-27:]}"
                 return f"Using {tool} {target}".strip()
             case EventType.POST_TOOL_USE:
-                return f"Completed {data.tool_name or 'tool'}"
+                assert isinstance(event, ToolEvent)
+                return f"Completed {event.data.tool_name or 'tool'}"
             case EventType.USER_PROMPT_SUBMIT:
-                prompt = data.prompt or ""
+                assert isinstance(event, PromptEvent)
+                prompt = event.data.prompt or ""
                 if len(prompt) > 40:
                     prompt = f"{prompt[:37]}..."
                 return f"User: {prompt}" if prompt else "User submitted prompt"
             case EventType.PERMISSION_REQUEST:
-                tool = data.tool_name or "tool"
+                assert isinstance(event, ToolEvent)
+                tool = event.data.tool_name or "tool"
                 return f"Waiting for permission: {tool}"
             case EventType.SUBAGENT_START:
-                return f"Spawned subagent: {data.agent_name or data.agent_id}"
+                assert isinstance(event, AgentEvent)
+                return f"Spawned subagent: {event.data.agent_name or event.data.agent_id}"
             case EventType.SUBAGENT_STOP:
+                assert isinstance(event, AgentEvent)
                 # Native SubagentStop hook only sets native_agent_id; fall back to it,
                 # and default success=True when neither agent_id nor explicit failure marker
                 # is present (native hook fires on success).
-                aid = data.agent_id or (
-                    f"subagent_{data.native_agent_id}" if data.native_agent_id else "unknown"
+                aid = event.data.agent_id or (
+                    f"subagent_{event.data.native_agent_id}"
+                    if event.data.native_agent_id
+                    else "unknown"
                 )
-                status = "successfully" if (data.success or data.success is None) else "with errors"
+                status = (
+                    "successfully"
+                    if (event.data.success or event.data.success is None)
+                    else "with errors"
+                )
                 return f"Subagent {aid} finished {status}"
             case EventType.STOP:
                 return "Main agent task complete"
             case EventType.CLEANUP:
-                return f"Agent {data.agent_id} left the building"
+                assert isinstance(event, AgentEvent)
+                return f"Agent {event.data.agent_id} left the building"
             case EventType.NOTIFICATION:
-                return f"Notification: {data.message or data.notification_type or 'info'}"
+                assert isinstance(event, LifecycleEvent)
+                return (
+                    f"Notification: {event.data.message or event.data.notification_type or 'info'}"
+                )
             case EventType.REPORTING:
-                return f"Agent {data.agent_id or 'unknown'} reporting"
+                assert isinstance(event, LifecycleEvent)
+                return f"Agent {event.data.agent_id or 'unknown'} reporting"
             case EventType.WALKING_TO_DESK:
-                return f"Agent {data.agent_id or 'unknown'} walking to desk"
+                assert isinstance(event, LifecycleEvent)
+                return f"Agent {event.data.agent_id or 'unknown'} walking to desk"
             case EventType.WAITING:
-                return f"Agent {data.agent_id or 'unknown'} waiting in queue"
+                assert isinstance(event, LifecycleEvent)
+                return f"Agent {event.data.agent_id or 'unknown'} waiting in queue"
             case EventType.LEAVING:
-                return f"Agent {data.agent_id or 'unknown'} leaving"
+                assert isinstance(event, LifecycleEvent)
+                return f"Agent {event.data.agent_id or 'unknown'} leaving"
             case EventType.ERROR:
-                return f"Error: {data.message or 'unknown error'}"
+                assert isinstance(event, LifecycleEvent)
+                return f"Error: {event.data.message or 'unknown error'}"
             case EventType.BACKGROUND_TASK_NOTIFICATION:
-                task_id = data.background_task_id or "unknown"
-                status = data.background_task_status or "completed"
-                summary = data.background_task_summary or ""
+                assert isinstance(event, BackgroundTaskEvent)
+                task_id = event.data.background_task_id or "unknown"
+                status = event.data.background_task_status or "completed"
+                summary = event.data.background_task_summary or ""
                 task_id_short = task_id[:7] if len(task_id) > 7 else task_id
                 summary_short = (summary[:40] + "...") if len(summary) > 40 else summary
                 return f"Background task {task_id_short} {status}: {summary_short}"
             case EventType.TASK_CREATED:
-                subject = data.task_subject or data.task_id or "unknown"
+                assert isinstance(event, TaskEvent)
+                subject = event.data.task_subject or event.data.task_id or "unknown"
                 if len(subject) > 50:
                     subject = f"{subject[:47]}..."
                 return f"Task created: {subject}"
             case EventType.TASK_COMPLETED:
-                subject = data.task_subject or data.task_id or "unknown"
+                assert isinstance(event, TaskEvent)
+                subject = event.data.task_subject or event.data.task_id or "unknown"
                 if len(subject) > 50:
                     subject = f"{subject[:47]}..."
                 return f"Task completed: {subject}"
             case EventType.TEAMMATE_IDLE:
-                name = data.teammate_name or "Teammate"
+                assert isinstance(event, LifecycleEvent)
+                name = event.data.teammate_name or "Teammate"
                 return f"{name} went idle"
             case _:
                 return f"Event: {event.event_type}"

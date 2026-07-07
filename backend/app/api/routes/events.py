@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from app.config import get_settings
 from app.core.event_processor import EventProcessor, get_event_processor
-from app.models.events import Event
+from app.models.events import AnyEvent
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def _check_rate_limit(session_id: str) -> None:
 @router.post("/events")
 async def receive_event(
     request: Request,
-    event: Event,
+    event: AnyEvent,
     background_tasks: BackgroundTasks,
     ep: Annotated[EventProcessor, Depends(get_event_processor)],
 ) -> dict[str, str]:

@@ -22,7 +22,12 @@ from app.core.summary_service import get_summary_service
 from app.core.transcript_poller import get_transcript_poller
 from app.models.agents import Agent, AgentState, BossState
 from app.models.common import BubbleContent, BubbleType
-from app.models.events import Event, EventData, EventType
+from app.models.events import (
+    AgentEvent,
+    AgentEventData,
+    EventDataBase,
+    EventType,
+)
 
 __all__ = [
     "handle_subagent_start",
@@ -40,13 +45,13 @@ logger = logging.getLogger(__name__)
 EnsureTranscriptPollFn = Callable[[], None]
 UpdateAgentStateFn = Callable[[str, str, AgentState], Awaitable[None]]
 PersistSyntheticEventFn = Callable[
-    [str, EventType, "EventData | dict[str, Any] | None"], Awaitable[None]
+    [str, EventType, "EventDataBase | dict[str, Any] | None"], Awaitable[None]
 ]
 
 
 async def handle_subagent_start(
     sm: StateMachine,
-    event: Event,
+    event: AgentEvent,
     ensure_transcript_poller_fn: EnsureTranscriptPollFn,
     update_agent_state_fn: UpdateAgentStateFn,
 ) -> None:
@@ -62,7 +67,7 @@ async def handle_subagent_start(
         update_agent_state_fn: Async callable that sets agent state and
             broadcasts.
     """
-    if not (event.data and event.data.agent_id):
+    if not event.data.agent_id:
         return
 
     agent_id = event.data.agent_id
@@ -105,7 +110,7 @@ async def handle_subagent_start(
 
 async def handle_subagent_info(
     sm: StateMachine,
-    event: Event,
+    event: AgentEvent,
     ensure_transcript_poller_fn: EnsureTranscriptPollFn,
 ) -> None:
     """Handle a SUBAGENT_INFO event.
@@ -118,9 +123,6 @@ async def handle_subagent_info(
         event: The SUBAGENT_INFO event.
         ensure_transcript_poller_fn: Callable that initialises the poller.
     """
-    if not event.data:
-        return
-
     transcript_path = event.data.agent_transcript_path
     native_agent_id = event.data.native_agent_id
 
@@ -131,14 +133,14 @@ async def handle_subagent_info(
     # and there are no unlinked (native_id=None) agents already present.
     already_tracked = any(a.native_id == native_agent_id for a in sm.agents.values())
     if not already_tracked and not any(a.native_id is None for a in sm.agents.values()):
-        synthetic_data = EventData(
+        synthetic_data = AgentEventData(
             agent_id=f"subagent_{native_agent_id}",
             native_agent_id=native_agent_id,
             agent_transcript_path=transcript_path,
             agent_type=event.data.agent_type,
             agent_name=event.data.agent_type,
         )
-        synthetic_start = Event(
+        synthetic_start = AgentEvent(
             event_type=EventType.SUBAGENT_START,
             session_id=event.session_id,
             timestamp=event.timestamp,
@@ -187,7 +189,7 @@ async def handle_subagent_info(
 
 async def handle_subagent_stop(
     sm: StateMachine,
-    event: Event,
+    event: AgentEvent,
     persist_synthetic_event_fn: PersistSyntheticEventFn,
 ) -> None:
     """Handle a SUBAGENT_STOP event.
@@ -201,9 +203,6 @@ async def handle_subagent_stop(
         event: The SUBAGENT_STOP event.
         persist_synthetic_event_fn: Async callable to persist a synthetic event.
     """
-    if not event.data:
-        return
-
     # Use shared resolution logic with fallback linking
     resolved = resolve_agent_for_stop(
         agents=sm.agents,
@@ -248,14 +247,14 @@ async def handle_subagent_stop(
 
     sm.remove_agent(resolved_agent_id)
     # Persist CLEANUP with the resolved agent_id so replay can also remove the agent.
-    cleanup_data = EventData(agent_id=resolved_agent_id)
+    cleanup_data = AgentEventData(agent_id=resolved_agent_id)
     await persist_synthetic_event_fn(event.session_id, EventType.CLEANUP, cleanup_data)
     await broadcast_state(event.session_id, sm)
 
 
 async def handle_agent_update(
     sm: StateMachine,
-    event: Event,
+    event: AgentEvent,
 ) -> None:
     """Handle an AGENT_UPDATE event.
 
@@ -265,7 +264,7 @@ async def handle_agent_update(
         sm: The StateMachine for this session.
         event: The AGENT_UPDATE event.
     """
-    if not (event.data and event.data.agent_id):
+    if not event.data.agent_id:
         return
 
     agent_id = event.data.agent_id
@@ -277,7 +276,7 @@ async def handle_agent_update(
 
 async def enrich_agent_with_summaries(
     agent: Agent,
-    event_data: EventData,
+    event_data: AgentEventData,
     existing_names: set[str] | None = None,
 ) -> None:
     """Generate a short agent name and task summary using the AI summary service.
@@ -338,7 +337,7 @@ async def enrich_agent_from_transcript(
         logger.debug(f"No user prompt found in transcript for agent {agent.id}")
         return
 
-    synthetic_data = EventData(
+    synthetic_data = AgentEventData(
         agent_id=agent.id,
         agent_type=agent_type,
         agent_name=agent_type,

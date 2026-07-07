@@ -21,7 +21,17 @@ from app.models.agents import (
     PhoneState,
 )
 from app.models.common import BubbleContent, BubbleType, TodoItem, TodoStatus
-from app.models.events import Event, EventData, EventType
+from app.models.events import (
+    AgentEvent,
+    AgentEventData,
+    AnyEvent,
+    BackgroundTaskEvent,
+    EventType,
+    LifecycleEvent,
+    PromptEvent,
+    TaskEvent,
+    ToolEvent,
+)
 from app.models.sessions import (
     AgentLifespan,
     BackgroundTask,
@@ -149,7 +159,7 @@ def resolve_agent_for_stop(
 # ---------------------------------------------------------------------------
 
 
-def parse_todos_from_event(event: Event) -> list[TodoItem]:
+def parse_todos_from_event(event: AnyEvent) -> list[TodoItem]:
     """Parse TodoWrite tool input from an event and return a new todo list.
 
     Args:
@@ -159,10 +169,13 @@ def parse_todos_from_event(event: Event) -> list[TodoItem]:
         A list of parsed :class:`TodoItem` objects, or an empty list if the
         event data is missing or malformed.
     """
-    if not event.data or not event.data.tool_input:
+    if not event.data or not getattr(event.data, "tool_input", None):
         return []
 
+    assert isinstance(event, ToolEvent)
     tool_input = event.data.tool_input
+    if not tool_input:
+        return []
     todos_data = tool_input.get("todos", [])
 
     if not isinstance(todos_data, list):
@@ -199,7 +212,7 @@ def parse_todos_from_event(event: Event) -> list[TodoItem]:
 # ---------------------------------------------------------------------------
 
 
-def _handle_session_start(sm: "StateMachine", event: Event) -> None:
+def _handle_session_start(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle SESSION_START: initialize office state for a new session."""
     sm.phase = OfficePhase.STARTING
     sm.boss_state = BossState.IDLE
@@ -208,7 +221,7 @@ def _handle_session_start(sm: "StateMachine", event: Event) -> None:
     sm.whiteboard.add_news_item("session", "New session started - ready for work!")
 
 
-def _handle_context_compaction(sm: "StateMachine", event: Event) -> None:
+def _handle_context_compaction(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle CONTEXT_COMPACTION: reset tool counter and record compaction."""
     sm.tool_uses_since_compaction = 0
     sm.whiteboard.record_compaction()
@@ -218,9 +231,10 @@ def _handle_context_compaction(sm: "StateMachine", event: Event) -> None:
     )
 
 
-def _handle_pre_tool_use(sm: "StateMachine", event: Event) -> None:
+def _handle_pre_tool_use(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle PRE_TOOL_USE: update boss/agent state and process TodoWrite events."""
-    tool_name = event.data.tool_name if event.data else None
+    assert isinstance(event, ToolEvent)
+    tool_name = event.data.tool_name
 
     if tool_name == "TodoWrite":
         parsed = parse_todos_from_event(event)
@@ -232,7 +246,7 @@ def _handle_pre_tool_use(sm: "StateMachine", event: Event) -> None:
         sm.boss_state = BossState.DELEGATING
         sm.elevator_state = ElevatorState.ARRIVING
     else:
-        agent_id = (event.data.agent_id if event.data else None) or "main"
+        agent_id = event.data.agent_id or "main"
 
         bubble = sm.tool_to_thought(event)
         if agent_id == "main":
@@ -241,7 +255,7 @@ def _handle_pre_tool_use(sm: "StateMachine", event: Event) -> None:
         else:
             if agent_id not in sm.agents and len(sm.agents) < sm.MAX_AGENTS:
                 new_agent = sm.create_agent(
-                    EventData(
+                    AgentEventData(
                         agent_id=agent_id,
                         agent_name=f"Ghost {agent_id[-4:]}",
                         task_description="Resumed mid-session",
@@ -257,10 +271,11 @@ def _handle_pre_tool_use(sm: "StateMachine", event: Event) -> None:
                     sm.arrival_queue.remove(agent_id)
 
 
-def _handle_user_prompt_submit(sm: "StateMachine", event: Event) -> None:
+def _handle_user_prompt_submit(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle USER_PROMPT_SUBMIT: boss receives a new user prompt."""
+    assert isinstance(event, PromptEvent)
     sm.boss_state = BossState.RECEIVING
-    prompt_text = event.data.prompt if event.data else ""
+    prompt_text = event.data.prompt
     sm.print_report = False
     sm.turn_active = True
     sm.last_user_prompt = prompt_text
@@ -273,10 +288,11 @@ def _handle_user_prompt_submit(sm: "StateMachine", event: Event) -> None:
         sm.boss_current_task = prompt_text
 
 
-def _handle_permission_request(sm: "StateMachine", event: Event) -> None:
+def _handle_permission_request(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle PERMISSION_REQUEST: set boss or agent to waiting state."""
-    agent_id = (event.data.agent_id if event.data else None) or "main"
-    tool_name = event.data.tool_name if event.data else "permission"
+    assert isinstance(event, ToolEvent)
+    agent_id = event.data.agent_id or "main"
+    tool_name = event.data.tool_name or "permission"
 
     waiting_bubble = BubbleContent(
         type=BubbleType.THOUGHT,
@@ -293,9 +309,10 @@ def _handle_permission_request(sm: "StateMachine", event: Event) -> None:
             sm.agents[agent_id].bubble = waiting_bubble
 
 
-def _handle_post_tool_use(sm: "StateMachine", event: Event) -> None:
+def _handle_post_tool_use(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle POST_TOOL_USE: increment tool counter and reset agent state."""
-    agent_id = (event.data.agent_id if event.data else None) or "main"
+    assert isinstance(event, ToolEvent)
+    agent_id = event.data.agent_id or "main"
     if agent_id == "main":
         sm.boss_state = BossState.IDLE
     elif agent_id in sm.agents and sm.agents[agent_id].state == AgentState.WAITING_PERMISSION:
@@ -305,11 +322,9 @@ def _handle_post_tool_use(sm: "StateMachine", event: Event) -> None:
     sm.whiteboard.track_tool_use(event)
 
 
-def _handle_subagent_start(sm: "StateMachine", event: Event) -> None:
+def _handle_subagent_start(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle SUBAGENT_START: create a new agent and add to arrival queue."""
-    if not event.data:
-        logger.warning("SUBAGENT_START guard failed: no event.data")
-        return
+    assert isinstance(event, AgentEvent)
     if not event.data.agent_id:
         logger.warning(
             f"SUBAGENT_START guard failed: missing agent_id (agent_id={event.data.agent_id})"
@@ -336,7 +351,7 @@ def _handle_subagent_start(sm: "StateMachine", event: Event) -> None:
     sm.whiteboard.add_news_item("agent", f"{short_name} joins the team!")
 
 
-def _handle_subagent_stop(sm: "StateMachine", event: Event) -> None:
+def _handle_subagent_stop(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle SUBAGENT_STOP: resolve agent, add to departure queue, credit tool uses."""
     if event.data:
         resolved = resolve_agent_for_stop(
@@ -369,21 +384,22 @@ def _handle_subagent_stop(sm: "StateMachine", event: Event) -> None:
             sm.whiteboard.add_news_item("agent", f"{agent_name} completed their task!")
 
 
-def _handle_cleanup(sm: "StateMachine", event: Event) -> None:
+def _handle_cleanup(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle CLEANUP: remove a departed agent from all state."""
     if event.data and event.data.agent_id:
         sm.remove_agent(event.data.agent_id)
 
 
-def _handle_stop(sm: "StateMachine", event: Event) -> None:
+def _handle_stop(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle STOP: main agent completes work, show completion message."""
+    assert isinstance(event, LifecycleEvent)
     sm.phase = OfficePhase.COMPLETING
     sm.boss_state = BossState.COMPLETING
     sm.turn_active = False
 
     speech_text = (
         event.data.speech_content.boss_phone
-        if event.data and event.data.speech_content and event.data.speech_content.boss_phone
+        if event.data.speech_content and event.data.speech_content.boss_phone
         else get_random_job_completion_quote()
     )
     sm.boss_bubble = BubbleContent(
@@ -396,7 +412,7 @@ def _handle_stop(sm: "StateMachine", event: Event) -> None:
     sm.whiteboard.add_news_item("session", "Job completed! Great work everyone!")
 
 
-def _handle_session_end(sm: "StateMachine", event: Event) -> None:
+def _handle_session_end(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle SESSION_END: mark session as ended."""
     sm.phase = OfficePhase.ENDED
     sm.boss_state = BossState.IDLE
@@ -404,28 +420,29 @@ def _handle_session_end(sm: "StateMachine", event: Event) -> None:
     sm.turn_active = False
 
 
-def _handle_background_task_notification(sm: "StateMachine", event: Event) -> None:
+def _handle_background_task_notification(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle BACKGROUND_TASK_NOTIFICATION: update background task status on whiteboard."""
-    if event.data:
-        task_id = event.data.background_task_id or "unknown"
-        status = event.data.background_task_status or "completed"
-        summary = event.data.background_task_summary
+    assert isinstance(event, BackgroundTaskEvent)
+    task_id = event.data.background_task_id or "unknown"
+    status = event.data.background_task_status or "completed"
+    summary = event.data.background_task_summary
 
-        sm.whiteboard.update_background_task(task_id, status, summary)
+    sm.whiteboard.update_background_task(task_id, status, summary)
 
-        status_emoji = "Completed" if status == "completed" else "Failed"
-        task_id_short = task_id[:8] if len(task_id) > 8 else task_id
-        summary_short = (summary[:30] + "...") if summary and len(summary) > 30 else summary
-        headline = f"{status_emoji} Task {task_id_short}: {summary_short or status}"
-        sm.whiteboard.add_news_item("agent", headline)
+    status_emoji = "Completed" if status == "completed" else "Failed"
+    task_id_short = task_id[:8] if len(task_id) > 8 else task_id
+    summary_short = (summary[:30] + "...") if summary and len(summary) > 30 else summary
+    headline = f"{status_emoji} Task {task_id_short}: {summary_short or status}"
+    sm.whiteboard.add_news_item("agent", headline)
 
 
-def _handle_task_created(sm: "StateMachine", event: Event) -> None:
+def _handle_task_created(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle TASK_CREATED: create a KanbanTask entry for Agent Teams."""
-    task_id = event.data.task_id if event.data else None
+    assert isinstance(event, TaskEvent)
+    task_id = event.data.task_id
     if not task_id:
         return
-    subject = event.data.task_subject or "" if event.data else ""
+    subject = event.data.task_subject or ""
     sm.kanban_tasks[task_id] = KanbanTask(
         task_id=task_id,
         subject=subject,
@@ -435,12 +452,13 @@ def _handle_task_created(sm: "StateMachine", event: Event) -> None:
     )
 
 
-def _handle_task_completed(sm: "StateMachine", event: Event) -> None:
+def _handle_task_completed(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle TASK_COMPLETED: mark a KanbanTask as completed for Agent Teams."""
-    task_id = event.data.task_id if event.data else None
+    assert isinstance(event, TaskEvent)
+    task_id = event.data.task_id
     if not task_id:
         return
-    subject = event.data.task_subject or "" if event.data else ""
+    subject = event.data.task_subject or ""
     if task_id in sm.kanban_tasks:
         sm.kanban_tasks[task_id].status = "completed"
     else:
@@ -453,7 +471,7 @@ def _handle_task_completed(sm: "StateMachine", event: Event) -> None:
         )
 
 
-def _handle_teammate_idle(sm: "StateMachine", event: Event) -> None:
+def _handle_teammate_idle(sm: "StateMachine", event: AnyEvent) -> None:
     """Handle TEAMMATE_IDLE: set teammate boss state to idle."""
     sm.boss_state = BossState.IDLE
     sm.boss_bubble = None
@@ -464,7 +482,7 @@ def _handle_teammate_idle(sm: "StateMachine", event: Event) -> None:
 # Dispatch table: EventType -> handler callable.
 # ---------------------------------------------------------------------------
 
-_DISPATCH_TABLE: dict[EventType, Callable[["StateMachine", Event], None]] = {
+_DISPATCH_TABLE: dict[EventType, Callable[["StateMachine", AnyEvent], None]] = {
     EventType.SESSION_START: _handle_session_start,
     EventType.CONTEXT_COMPACTION: _handle_context_compaction,
     EventType.PRE_TOOL_USE: _handle_pre_tool_use,
@@ -784,7 +802,7 @@ class StateMachine:
         if agent_id in self.handin_queue:
             self.handin_queue.remove(agent_id)
 
-    def transition(self, event: Event) -> None:
+    def transition(self, event: AnyEvent) -> None:
         """Process an event and update state accordingly.
 
         Uses a dispatch table mapping :class:`EventType` to a handler
@@ -814,7 +832,7 @@ class StateMachine:
                 )
                 raise
 
-    def tool_to_thought(self, event: Event) -> BubbleContent:
+    def tool_to_thought(self, event: ToolEvent) -> BubbleContent:
         """Convert a tool use event to thought bubble content.
 
         Maps tool names to icons and extracts relevant context (file paths,
@@ -838,10 +856,9 @@ class StateMachine:
             "Task": "🎯",
         }
 
-        tool_name = event.data.tool_name if event.data else ""
-        tool_name = tool_name or ""
+        tool_name = event.data.tool_name or ""
         icon = tool_icons.get(tool_name, "⚙️")
-        tool_input = event.data.tool_input if (event.data and event.data.tool_input) else {}
+        tool_input = event.data.tool_input or {}
 
         text: str = tool_name
 
@@ -866,14 +883,14 @@ class StateMachine:
 
         return BubbleContent(type=BubbleType.THOUGHT, text=text, icon=icon)
 
-    def create_agent(self, data: EventData) -> Agent:
+    def create_agent(self, data: AgentEventData) -> Agent:
         """Create a new agent from event data.
 
         Assigns a color from the palette, generates a short name via the
         summary service, and sets initial state to ARRIVING.
 
         Args:
-            data: EventData containing agent_id, agent_name, and
+            data: AgentEventData containing agent_id, agent_name, and
                 task_description fields.
 
         Returns:
