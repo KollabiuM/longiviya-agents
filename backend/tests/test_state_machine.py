@@ -31,8 +31,8 @@ class TestStateMachineInit:
     def test_initial_token_counts_zero(self) -> None:
         """Initial token counts should be zero."""
         sm = StateMachine()
-        assert sm.total_input_tokens == 0
-        assert sm.total_output_tokens == 0
+        assert sm.token_tracker.total_input_tokens == 0
+        assert sm.token_tracker.total_output_tokens == 0
 
     def test_initial_tool_uses_zero(self) -> None:
         """Initial tool uses counter should be zero."""
@@ -126,8 +126,8 @@ class TestToGameState:
     def test_context_utilization_calculated(self) -> None:
         """Context utilization should be calculated from tokens."""
         sm = StateMachine()
-        sm.total_input_tokens = 100_000
-        sm.total_output_tokens = 50_000
+        sm.token_tracker.total_input_tokens = 100_000
+        sm.token_tracker.total_output_tokens = 50_000
         state = sm.to_game_state("test")
         # 150,000 / 200,000 = 0.75
         assert state.office.context_utilization == 0.75
@@ -135,8 +135,8 @@ class TestToGameState:
     def test_context_utilization_capped_at_1(self) -> None:
         """Context utilization should be capped at 1.0."""
         sm = StateMachine()
-        sm.total_input_tokens = 300_000
-        sm.total_output_tokens = 100_000
+        sm.token_tracker.total_input_tokens = 300_000
+        sm.token_tracker.total_output_tokens = 100_000
         state = sm.to_game_state("test")
         assert state.office.context_utilization == 1.0
 

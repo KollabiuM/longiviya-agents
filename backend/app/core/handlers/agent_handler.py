@@ -84,7 +84,7 @@ async def handle_subagent_start(
         # Propagate enriched short name to the lifespan record.
         enriched_name = sm.agents[agent_id].name
         if enriched_name:
-            for lifespan in sm.agent_lifespans:
+            for lifespan in sm.whiteboard.agent_lifespans:
                 if lifespan.agent_id == agent_id:
                     lifespan.agent_name = enriched_name
                     break

@@ -33,13 +33,11 @@ from app.models.events import (
     ToolEvent,
 )
 from app.models.sessions import (
-    AgentLifespan,
     BackgroundTask,
     ConversationEntry,
     GameState,
     HistoryEntry,
     KanbanTask,
-    NewsItem,
     WhiteboardData,
 )
 
@@ -573,131 +571,6 @@ class StateMachine:
 
     # Whiteboard tracking delegated to WhiteboardTracker
     whiteboard: WhiteboardTracker = field(default_factory=WhiteboardTracker)
-
-    # ---------------------------------------------------------------------------
-    # Backward-compatible property aliases so existing code that accesses
-    # sm.tool_usage, sm.agent_lifespans, etc. continues to work.
-    # ---------------------------------------------------------------------------
-
-    @property
-    def tool_usage(self) -> dict[str, int]:
-        return self.whiteboard.tool_usage
-
-    @property
-    def task_completed_count(self) -> int:
-        return self.whiteboard.task_completed_count
-
-    @task_completed_count.setter
-    def task_completed_count(self, value: int) -> None:
-        self.whiteboard.task_completed_count = value
-
-    @property
-    def bug_fixed_count(self) -> int:
-        return self.whiteboard.bug_fixed_count
-
-    @bug_fixed_count.setter
-    def bug_fixed_count(self, value: int) -> None:
-        self.whiteboard.bug_fixed_count = value
-
-    @property
-    def coffee_break_count(self) -> int:
-        return self.whiteboard.coffee_break_count
-
-    @coffee_break_count.setter
-    def coffee_break_count(self, value: int) -> None:
-        self.whiteboard.coffee_break_count = value
-
-    @property
-    def code_written_count(self) -> int:
-        return self.whiteboard.code_written_count
-
-    @code_written_count.setter
-    def code_written_count(self, value: int) -> None:
-        self.whiteboard.code_written_count = value
-
-    @property
-    def recent_error_count(self) -> int:
-        return self.whiteboard.recent_error_count
-
-    @recent_error_count.setter
-    def recent_error_count(self, value: int) -> None:
-        self.whiteboard.recent_error_count = value
-
-    @property
-    def recent_success_count(self) -> int:
-        return self.whiteboard.recent_success_count
-
-    @recent_success_count.setter
-    def recent_success_count(self, value: int) -> None:
-        self.whiteboard.recent_success_count = value
-
-    @property
-    def consecutive_successes(self) -> int:
-        return self.whiteboard.consecutive_successes
-
-    @consecutive_successes.setter
-    def consecutive_successes(self, value: int) -> None:
-        self.whiteboard.consecutive_successes = value
-
-    @property
-    def last_incident_time(self) -> str | None:
-        return self.whiteboard.last_incident_time
-
-    @last_incident_time.setter
-    def last_incident_time(self, value: str | None) -> None:
-        self.whiteboard.last_incident_time = value
-
-    @property
-    def agent_lifespans(self) -> list[AgentLifespan]:
-        return self.whiteboard.agent_lifespans
-
-    @agent_lifespans.setter
-    def agent_lifespans(self, value: list[AgentLifespan]) -> None:
-        self.whiteboard.agent_lifespans = value
-
-    @property
-    def news_items(self) -> list[NewsItem]:
-        return self.whiteboard.news_items
-
-    @news_items.setter
-    def news_items(self, value: list[NewsItem]) -> None:
-        self.whiteboard.news_items = value
-
-    @property
-    def coffee_cups(self) -> int:
-        return self.whiteboard.coffee_cups
-
-    @coffee_cups.setter
-    def coffee_cups(self, value: int) -> None:
-        self.whiteboard.coffee_cups = value
-
-    @property
-    def file_edits(self) -> dict[str, int]:
-        return self.whiteboard.file_edits
-
-    @file_edits.setter
-    def file_edits(self, value: dict[str, int]) -> None:
-        self.whiteboard.file_edits = value
-
-    # ---------------------------------------------------------------------------
-    # Backward-compatible property aliases for token fields.
-    # ---------------------------------------------------------------------------
-
-    @property
-    def total_input_tokens(self) -> int:
-        return self.token_tracker.total_input_tokens
-
-    @total_input_tokens.setter
-    def total_input_tokens(self, value: int) -> None:
-        self.token_tracker.total_input_tokens = value
-
-    @property
-    def total_output_tokens(self) -> int:
-        return self.token_tracker.total_output_tokens
-
-    @total_output_tokens.setter
-    def total_output_tokens(self, value: int) -> None:
-        self.token_tracker.total_output_tokens = value
 
     # ---------------------------------------------------------------------------
     # Core methods
