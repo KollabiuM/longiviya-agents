@@ -98,6 +98,11 @@ backend/visualizer.db-wal
 
 # --- Build Artifacts ---
 backend/static/
+# Orphan local build-artifact dirs (desktop-app / TUI experiments) — untracked,
+# regenerable; gitignored so they aren't accidentally committed. Delete locally
+# when no longer needed (ARC-030).
+desktop/
+tui/
 PRD.md
 .claude/.cc2cc-session-id
 *.local.*
