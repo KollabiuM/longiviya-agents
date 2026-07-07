@@ -66,6 +66,7 @@ See `.claude/skills/*/SKILL.md` for details.
 |----------|------|
 | Root package | `pyproject.toml` |
 | Backend | `backend/pyproject.toml` |
+| Backend OpenAPI | `backend/app/config.py` (`VERSION` — derived via `importlib.metadata`, no manual bump needed) |
 | Hooks | `hooks/pyproject.toml` |
 | Hooks CLI | `hooks/src/claude_office_hooks/main.py` (`__version__`) |
 | Frontend package | `frontend/package.json` |

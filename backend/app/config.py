@@ -1,3 +1,4 @@
+import importlib.metadata
 import secrets
 from functools import lru_cache
 from pathlib import Path
@@ -8,9 +9,21 @@ _BACKEND_DIR = Path(__file__).parent.parent.resolve()
 _DEFAULT_DB_PATH = _BACKEND_DIR / "visualizer.db"
 
 
+def _resolve_version() -> str:
+    """Derive the backend version from installed package metadata (DOC-007).
+
+    Avoids the drift a hardcoded VERSION caused. Falls back to a sentinel when
+    the distribution is not installed so OpenAPI docs still render.
+    """
+    try:
+        return importlib.metadata.version("claude-office-visualizer")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0+local"
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Claude Office Visualizer"
-    VERSION: str = "0.14.0"
+    VERSION: str = _resolve_version()
     API_V1_STR: str = "/api/v1"
 
     BACKEND_CORS_ORIGINS: list[str] = [

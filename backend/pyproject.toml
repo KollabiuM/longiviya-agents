@@ -80,5 +80,4 @@ dev = [
     "pytest-timeout>=2.4.0",
     "ruff>=0.15.12",
     "pre-commit>=4.6.0",
-    "httpx2>=2.4.0",
 ]

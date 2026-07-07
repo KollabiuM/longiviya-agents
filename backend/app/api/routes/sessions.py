@@ -32,16 +32,18 @@ def kill_simulation() -> bool:
     """
     global _simulation_process
     if _simulation_process is not None:
+        killed = True
         try:
             _simulation_process.terminate()
             _simulation_process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             _simulation_process.kill()
         except Exception:
-            pass
+            logger.exception("Failed to kill simulation process")
+            killed = False
         finally:
             _simulation_process = None
-        return True
+        return killed
     return False
 
 
