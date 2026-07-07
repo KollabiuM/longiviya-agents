@@ -15,7 +15,7 @@ Current coordinates (from frontend/src/systems/queuePositions.ts):
 """
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import requests
 
@@ -28,7 +28,7 @@ def send_event(event_type: str, data: dict | None = None) -> None:
     payload = {
         "event_type": event_type,
         "session_id": SESSION_ID,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "data": data or {},
     }
     try:

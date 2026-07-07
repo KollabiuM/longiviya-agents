@@ -15,12 +15,22 @@ from pathlib import Path
 # Must run from backend/ directory so imports resolve
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
-from pydantic.json_schema import models_json_schema  # noqa: E402
-
-from app.models.agents import Agent, Boss, ElevatorState, OfficeState, PhoneState  # noqa: E402  # type: ignore[import]
-from app.models.common import BubbleContent, BubbleType, SpeechContent, TodoItem, TodoStatus  # noqa: E402  # type: ignore[import]
-from app.models.events import Event, EventData, EventType  # noqa: E402  # type: ignore[import]
-from app.models.git import ChangedFile, Commit, FileStatus, GitStatus  # noqa: E402  # type: ignore[import]
+from app.models.agents import (  # noqa: E402  # type: ignore[import]
+    Agent,
+    Boss,
+    OfficeState,
+)
+from app.models.common import (  # noqa: E402  # type: ignore[import]
+    BubbleContent,
+    SpeechContent,
+    TodoItem,
+)
+from app.models.events import Event, EventData  # noqa: E402  # type: ignore[import]
+from app.models.git import (  # noqa: E402  # type: ignore[import]
+    ChangedFile,
+    Commit,
+    GitStatus,
+)
 from app.models.overview import OverviewEntry, OverviewState  # noqa: E402  # type: ignore[import]
 from app.models.sessions import (  # noqa: E402  # type: ignore[import]
     AgentLifespan,
@@ -31,6 +41,7 @@ from app.models.sessions import (  # noqa: E402  # type: ignore[import]
     Session,
     WhiteboardData,
 )
+from pydantic.json_schema import models_json_schema  # noqa: E402
 
 # All Pydantic BaseModel subclasses to generate types for
 # (TypedDict classes like ConversationEntry and HistoryEntry are not BaseModel

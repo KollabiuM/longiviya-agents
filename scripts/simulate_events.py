@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Simulation entry point for the Claude Office Visualizer.
 
-Runs one of three pre-built scenarios against the backend API:
+Runs one of five pre-built scenarios against the backend API:
 
   basic       Simple agent spawn/complete (~60 s)
   complex     Multi-agent workflow with context compaction (~5-10 min) [default]
   edge_cases  Error handling, permissions, orphan cleanup (~2 min)
+  quick       Fast (~30 s) full-lifecycle smoke scenario
+  teams       Multi-session team scenario (room-orchestrator merge path)
 
 Usage::
 
@@ -13,6 +15,8 @@ Usage::
     python scripts/simulate_events.py complex
     python scripts/simulate_events.py basic
     python scripts/simulate_events.py edge_cases
+    python scripts/simulate_events.py quick
+    python scripts/simulate_events.py teams
 
     # Custom session ID
     python scripts/simulate_events.py complex --session my_session_42
@@ -28,16 +32,8 @@ from pathlib import Path
 # Make the scripts/ directory importable so ``scripts.scenarios`` resolves.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from scripts.scenarios import SCENARIOS
 from scripts.scenarios._base import SimulationContext
-from scripts.scenarios.basic import run as run_basic
-from scripts.scenarios.complex import run as run_complex
-from scripts.scenarios.edge_cases import run as run_edge_cases
-
-SCENARIOS: dict[str, object] = {
-    "basic": run_basic,
-    "complex": run_complex,
-    "edge_cases": run_edge_cases,
-}
 
 DEFAULT_SCENARIO = "complex"
 DEFAULT_SESSION_ID = "sim_session_123"
@@ -76,17 +72,13 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    scenario_fn = SCENARIOS.get(args.scenario)
-    if scenario_fn is None:
-        parser.error(f"Unknown scenario '{args.scenario}'. Choose from: {', '.join(SCENARIOS)}")
-
     ctx = SimulationContext(
         session_id=args.session,
         verbose=not args.quiet,
     )
 
     print(f"Running scenario '{args.scenario}' with session '{args.session}'...")
-    scenario_fn(ctx)  # type: ignore[call-arg]
+    SCENARIOS[args.scenario](ctx)
     print("Done.")
 
 

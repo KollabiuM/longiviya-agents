@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import requests
 
@@ -107,7 +107,7 @@ class SimulationContext:
         payload = {
             "event_type": event_type,
             "session_id": self.session_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "data": data or {},
         }
         try:
@@ -190,3 +190,48 @@ class SimulationContext:
         """Mark the compaction animation as complete."""
         with self.lock:
             self.compaction_in_progress = False
+
+
+@dataclass
+class TeamSimulationContext:
+    """Groups one lead and N teammate ``SimulationContext``s for team scenarios.
+
+    The room-orchestrator merge path is only exercised when multiple sessions
+    share a ``team_name``; this context owns the member contexts so the
+    ``teams`` scenario can drive that path without re-implementing event
+    plumbing.
+
+    Args:
+        team_name: Identifier shared by every member's ``team_name`` field.
+        project_name: Shared ``project_name`` sent on ``session_start``.
+        verbose: Forwarded to each member ``SimulationContext``.
+        members: Member contexts in creation order (lead first).
+    """
+
+    team_name: str
+    project_name: str = "TeamProject"
+    verbose: bool = True
+    members: list[SimulationContext] = field(default_factory=list)
+
+    def _add(self, session_id: str) -> SimulationContext:
+        """Create a member context, register it, and return it."""
+        ctx = SimulationContext(session_id=session_id, verbose=self.verbose)
+        self.members.append(ctx)
+        return ctx
+
+    def add_lead(self, session_id: str) -> SimulationContext:
+        """Create and register the lead session context."""
+        return self._add(session_id)
+
+    def add_teammate(self, name: str, session_id: str) -> SimulationContext:
+        """Create and register a teammate session context.
+
+        ``name`` is accepted for API symmetry with :meth:`add_lead`; the
+        teammate's display name is carried per-event via ``teammate_name``.
+        """
+        return self._add(session_id)
+
+    def log(self, msg: str) -> None:
+        """Print *msg* when verbose mode is active."""
+        if self.verbose:
+            print(msg)

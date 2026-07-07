@@ -41,23 +41,31 @@ simulate:			# Run event simulation
 test-agent:			# Run single agent test
 	uv run python scripts/test_single_agent.py
 
-lint:			# Run ruff lint on all components
+lint:			# Run lint on all components
 	make -C backend lint
 	make -C frontend lint
+	make -C hooks lint
+	make -C opencode-plugin lint
+	cd backend && uv run ruff check ../scripts
 
-fmt:			# Reformat code with ruff
+fmt:			# Reformat code
 	make -C backend fmt
 	make -C frontend fmt
+	make -C hooks fmt
 
 test:			# Run all tests
 	make -C backend test
 	make -C frontend test
+	make -C hooks test
+	make -C opencode-plugin test
 
 typecheck:			# Run static type checks
 	make -C backend typecheck
 	make -C frontend typecheck
+	make -C hooks typecheck
+	make -C opencode-plugin typecheck
 
-checkall: fmt lint typecheck		# Run all checks
+checkall: fmt lint typecheck test		# Run all checks including tests
 
 gen-types:			# Regenerate TypeScript types from Pydantic models
 	cd backend && uv run python ../scripts/gen_types.py

@@ -14,15 +14,15 @@ that the fundamental agent lifecycle is correctly visualised.
 from __future__ import annotations
 
 import random
-import time
 import threading
+import time
 from pathlib import Path
 
 from scripts.scenarios._base import (
     AGENT_NAMES,
     COMPACTION_ANIMATION_DURATION,
-    SimulationContext,
     TASK_DESCRIPTIONS,
+    SimulationContext,
 )
 
 

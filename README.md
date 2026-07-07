@@ -201,6 +201,7 @@ make dev
 | `make dev-tmux` | Start in tmux with separate windows (recommended) |
 | `make dev-tmux-kill` | Kill the tmux session |
 | `make checkall` | Run format, lint, typecheck, and tests |
+| `make test` | Run all test suites without the other checks |
 | `make simulate` | Run event simulation script |
 | `make build-static` | Build frontend and copy to backend for standalone deployment |
 | `make clean-all` | Remove all build artifacts and data |

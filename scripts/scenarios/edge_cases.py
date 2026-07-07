@@ -94,10 +94,11 @@ def _scenario_tool_errors(ctx: SimulationContext) -> None:
     ]
 
     for tool_name, path_or_cmd, error_type in errors:
-        if tool_name == "Bash":
-            tool_input = {"command": path_or_cmd}
-        else:
-            tool_input = {"file_path": path_or_cmd}
+        tool_input = (
+            {"command": path_or_cmd}
+            if tool_name == "Bash"
+            else {"file_path": path_or_cmd}
+        )
 
         ctx.send_event(
             "pre_tool_use",

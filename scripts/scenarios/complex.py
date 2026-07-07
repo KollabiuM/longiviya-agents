@@ -23,8 +23,8 @@ from pathlib import Path
 from scripts.scenarios._base import (
     AGENT_NAMES,
     COMPACTION_ANIMATION_DURATION,
-    SimulationContext,
     TASK_DESCRIPTIONS,
+    SimulationContext,
 )
 
 
@@ -279,7 +279,10 @@ def run(ctx: SimulationContext) -> None:
     ctx.send_event(
         "user_prompt_submit",
         {
-            "prompt": "Please implement the new feature based on PRD.md and generate a report documenting the changes made."
+            "prompt": (
+                "Please implement the new feature based on PRD.md and "
+                "generate a report documenting the changes made."
+            )
         },
     )
     time.sleep(2)
