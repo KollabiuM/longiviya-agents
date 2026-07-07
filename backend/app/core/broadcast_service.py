@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from app.api.websocket import manager
+from app.core.connection_manager import manager
 from app.core.state_machine import StateMachine
 from app.models.sessions import GameState, HistoryEntry
 

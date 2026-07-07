@@ -9,8 +9,8 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.api.websocket import manager
 from app.config import get_settings
+from app.core.connection_manager import manager
 from app.models.git import ChangedFile, Commit, FileStatus, GitStatus
 
 logger = logging.getLogger(__name__)

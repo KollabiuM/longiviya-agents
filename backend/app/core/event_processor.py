@@ -19,7 +19,6 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from app.api.websocket import manager
 from app.config import get_settings
 from app.core.beads_poller import get_beads_poller, has_beads, init_beads_poller
 from app.core.broadcast_service import (
@@ -29,6 +28,7 @@ from app.core.broadcast_service import (
     broadcast_room_state,
     broadcast_state,
 )
+from app.core.connection_manager import manager
 from app.core.floor_config import get_cached_building_config
 from app.core.handlers import (
     enrich_agent_from_transcript,
