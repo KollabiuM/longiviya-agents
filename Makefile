@@ -5,7 +5,8 @@
 	dev-tmux dev-tmux-kill dev-tmux-backend dev-tmux-frontend \
 	build-static frontend-build-static \
 	docker-build docker-up docker-down docker-logs docker-shell \
-	pre-commit pre-commit-update depsupdate depsshow uv-lock uv-sync setup resetup remove-venv help
+	pre-commit pre-commit-update depsupdate depsshow uv-lock uv-sync setup resetup remove-venv \
+	bump-version version-check help
 
 # Detect package manager: prefer bun if available, otherwise use npm
 PKG_MGR := $(shell command -v bun >/dev/null 2>&1 && echo "bun" || echo "npm")
@@ -201,6 +202,16 @@ depsupdate:			# Update all dependencies
 
 depsshow:			# Show dependency tree
 	cd backend && uv tree
+
+# Version management (ARC-021 / QA-010): rewrite or verify all version locations.
+bump-version:			# Bump version everywhere: make bump-version VERSION=x.y.z
+ifndef VERSION
+	$(error VERSION is required: make bump-version VERSION=x.y.z)
+endif
+	uv run --no-project python scripts/bump_version.py $(VERSION)
+
+version-check:			# Verify all version locations agree (CI-friendly)
+	uv run --no-project python scripts/bump_version.py --check
 
 # Pre-commit
 pre-commit:			# Run pre-commit on all files

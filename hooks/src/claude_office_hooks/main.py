@@ -33,7 +33,13 @@ try:
     from claude_office_hooks.debug_logger import debug_log
     from claude_office_hooks.event_mapper import map_event
 
-    __version__ = "0.22.0"
+    # Derived from package metadata; fallback covers the uninstalled case (ARC-021).
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        __version__ = _pkg_version("claude-office-hooks")
+    except Exception:
+        __version__ = "0.0.0+unknown"
 
     # Load config at module init so DEBUG flag is available immediately
     _config = load_config()
