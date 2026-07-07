@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -30,22 +31,45 @@ def get_settings_path() -> Path:
 
 
 def load_settings(path: Path) -> dict[str, Any]:
-    """Load settings from JSON file."""
+    """Load settings from JSON file.
+
+    A missing file returns ``{}`` (fresh install). A file that exists but
+    fails to parse is a hard stop: returning ``{}`` here would cause the
+    caller to write a near-empty dict back over the user's real config and
+    silently wipe unrelated settings (permissions, env, model, statusline).
+    """
     if not path.exists():
         return {}
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except json.JSONDecodeError:
-        print(f"Warning: Could not parse {path}. Starting with empty settings.")
-        return {}
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"ERROR: {path} exists but is not valid JSON ({e}).\n"
+            "Refusing to continue: proceeding would overwrite your settings.\n"
+            "Fix or move the file, then re-run install."
+        ) from e
 
 
 def save_settings(path: Path, settings: dict[str, Any]) -> None:
-    """Save settings to JSON file."""
+    """Save settings atomically, backing up the original once per run.
+
+    Writes a temp file in the same directory then ``os.replace``s it into
+    place, so a crash mid-write cannot leave a truncated ``settings.json``.
+    The first mutation of an existing file is snapshotted to
+    ``settings.json.bak``; the ``if not backup.exists()`` guard preserves
+    the oldest known-good copy across repeated runs.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    if path.exists():
+        backup = path.with_suffix(".json.bak")
+        if not backup.exists():
+            shutil.copy2(path, backup)
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
 
 
 def create_hook_config(hook_cmd: str, hook_type: str) -> dict[str, Any]:
