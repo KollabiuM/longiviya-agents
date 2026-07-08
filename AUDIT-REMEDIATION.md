@@ -11,29 +11,29 @@
 
 ## TL;DR
 
-**~60 of 69 issues resolved** across **35 verified commits** on `fix/audit-remediation`. All components green: `make checkall` from root exits 0 (backend **397** tests, frontend **149**, hooks **18**, opencode-plugin **29** — up from a 41/0/13/0 baseline; **+489 new tests**). Verified at runtime too: `make dev-tmux` + `make simulate` ran clean to `session_end`, every event type through the ARC-014 union, `/api/v1/status` no longer discloses the key (SEC-001), no ImportErrors. **All security, all documentation, the entire backend structural chain, and the bulk of code quality are done.** **~9 remain**: the frontend god-object refactors (the audit's *long-term/backlog* — deferred as too risky for one-shot automation) plus ARC-020 (needs a security decision) and QA-016 (a risky canvas split the audit says to do opportunistically).
+**63 of 69 issues resolved** across **39 verified commits** on `fix/audit-remediation`. All components green: `make checkall` from root exits 0 (backend **397** tests, frontend **149**, hooks **18**, opencode-plugin **29** — up from a 41/0/13/0 baseline; **+489 new tests**). Verified at runtime too: `make dev-tmux` + `make simulate` ran clean to `session_end`, every event type through the ARC-014 union, `/api/v1/status` no longer discloses the key (SEC-001), no ImportErrors. **All security, all documentation, the entire backend structural chain, and the bulk of code quality are done.** **5 remain**: the frontend god-object refactors still pending (ARC-005/006, QA-003 — the audit's *long-term/backlog*) plus ARC-020 (needs a security decision) and QA-016 (a risky canvas split the audit says to do opportunistically). **ARC-004/017 + QA-009 — the single-writer agent-state ownership refactor — landed in this cycle** (listener port breaking the `machines↔systems` cycle; `QueueManager`'s private maps folded into the store as the sole writer; the six `setTimeout(0)` re-entrancy escapes replaced by a microtask flush queue; the 3-second "stuck boss" watchdog deleted). Runtime-verified end-to-end: `make simulate` (complex, 4+ agents) completes the full lifecycle with zero console errors and no stuck agents.
 
 ---
 
 ## Resolved Issues ✅ (~52)
 
-### Architecture (19)
-ARC-001 (CI) · ARC-002 (dispatch table, =QA-004) · ARC-003 (blocking I/O off loop) · ARC-008 (hooks fail-safe) · ARC-009 (teams scenario) · **ARC-010 (event contract test)** · ARC-011 (ConnectionManager to domain) · ARC-012 (DI seams functional) · ARC-013 (BasePoller framework) · ARC-014 (EventData discriminated union) · **ARC-015 (bounded growth + broadcast hot spots)** · ARC-016 (per-session rate limiter) · ARC-018 (useWebSocketEvents split) · **ARC-022 (httpx2 — confirmed load-bearing stub peer dep, documented; *not* removed)** · **ARC-024 (app exception handler + PATCH consolidation)** · ARC-025 (StateMachine aliases, =QA-007) · **ARC-026 (StrictMode workaround documented)** · **ARC-027 (dep-pinning policy)** · **ARC-028 (DOM panels moved out of components/game)** · **ARC-030 (gitignore orphan desktop/tui)** · **ARC-031 (dead guard — resolved by ARC-009)** · **ARC-021 (version-bump automation + make bump-version, = QA-010)** · **ARC-019 (gen_types completeness test)** · **ARC-029 (install.sh read-modify-write)** · **ARC-023 (main.py split into middleware/migrate/websockets)**.
+### Architecture (21)
+ARC-001 (CI) · ARC-002 (dispatch table, =QA-004) · ARC-003 (blocking I/O off loop) · ARC-008 (hooks fail-safe) · ARC-009 (teams scenario) · **ARC-010 (event contract test)** · ARC-011 (ConnectionManager to domain) · ARC-012 (DI seams functional) · ARC-013 (BasePoller framework) · ARC-014 (EventData discriminated union) · **ARC-015 (bounded growth + broadcast hot spots)** · ARC-016 (per-session rate limiter) · ARC-018 (useWebSocketEvents split) · **ARC-022 (httpx2 — confirmed load-bearing stub peer dep, documented; *not* removed)** · **ARC-024 (app exception handler + PATCH consolidation)** · ARC-025 (StateMachine aliases, =QA-007) · **ARC-026 (StrictMode workaround documented)** · **ARC-027 (dep-pinning policy)** · **ARC-028 (DOM panels moved out of components/game)** · **ARC-030 (gitignore orphan desktop/tui)** · **ARC-031 (dead guard — resolved by ARC-009)** · **ARC-021 (version-bump automation + make bump-version, = QA-010)** · **ARC-019 (gen_types completeness test)** · **ARC-029 (install.sh read-modify-write)** · **ARC-023 (main.py split into middleware/migrate/websockets)** · **ARC-017 (machines↔systems import cycle broken via AnimationListener port + gameRuntime composition root)** · **ARC-004 (single-writer queue ownership: QueueManager's private maps folded into the store, `setTimeout(0)`→microtask flush, stuck-boss watchdog deleted — bundles QA-009)**.
 
 ### Security (6) — ⚠ all flagged for manual review
 SEC-001 (no key in `/status`) · SEC-002 (focus/clipboard gated) · SEC-003 (git hardening) · SEC-004 (docker loopback) · SEC-005 (`/events` gating decision + plugin `X-API-Key`) · SEC-006 (`LOG_RICH_TRACEBACKS`).
 
-### Code Quality (11)
-QA-001 (76 characterization tests) · QA-002 (plugin SessionTracker + ESLint) · QA-004 (via ARC-002) · QA-005 (pure `shouldShowToast`/`resolveSpawn`/`TypingTracker`) · QA-006 (single-`set()` dequeue) · QA-007/ARC-025 (alias block removed) · QA-008 (swallowed exception logged) · QA-011 (`console.log` gated) · QA-012 (`||`→`??`) · **QA-013 (magic numbers named + dicts hoisted)** · **QA-014 (WS origin from settings)** · **QA-015 (broadcast helper deduped)**.
+### Code Quality (12)
+QA-001 (76 characterization tests) · QA-002 (plugin SessionTracker + ESLint) · QA-004 (via ARC-002) · QA-005 (pure `shouldShowToast`/`resolveSpawn`/`TypingTracker`) · QA-006 (single-`set()` dequeue) · QA-007/ARC-025 (alias block removed) · QA-008 (swallowed exception logged) · QA-011 (`console.log` gated) · QA-012 (`||`→`??`) · **QA-013 (magic numbers named + dicts hoisted)** · **QA-014 (WS origin from settings)** · **QA-015 (broadcast helper deduped)** · **QA-009 (`setTimeout(0)` ordering → microtask flush queue, via ARC-004)**.
 
 ### Documentation (16)
 DOC-001 through DOC-016 — all resolved.
 
 ---
 
-## Deferred — Frontend God-Object Refactors (6) 🔧
+## Deferred — Frontend God-Object Refactors (3) 🔧
 
-The riskiest tranche; the audit's own *long-term/backlog*. Automated remediation's safety net (unit tests) is weakest where their risk is highest (runtime coordination/timing — the project's historical stuck-state bug class). Deferred deliberately; QA-001's characterization tests make dedicated, human-reviewed work safer. Order for a follow-up: ARC-004/017 → ARC-005 → ARC-006 / QA-003 / QA-009.
+The remaining riskiest tranche; the audit's own *long-term/backlog*. Automated remediation's safety net (unit tests) is weakest where their risk is highest (runtime coordination/timing — the project's historical stuck-state bug class). Deferred deliberately; QA-001's characterization tests make dedicated, human-reviewed work safer. **ARC-004/017 + QA-009 (the single-writer agent-state ownership refactor) are now done.** Remaining order for a follow-up: ARC-005 (gameStore slicing) → ARC-006 (per-frame writes off Zustand) / QA-003 (gameStore duplication).
 
 ---
 
@@ -75,6 +75,6 @@ The riskiest tranche; the audit's own *long-term/backlog*. Automated remediation
 1. **Review security changes** (SEC-001..006) before merge.
 2. **Push / open a PR**; confirm remote CI green.
 3. **ARC-030 / ARC-020** manual decisions above.
-4. **Frontend god-object refactors** (ARC-004/017 → ARC-005 → ARC-006 / QA-003/009) as a dedicated, carefully-reviewed follow-up.
+4. **Frontend god-object refactors** — ARC-004/017 + QA-009 (single-writer ownership) **done**; remaining: ARC-005 → ARC-006 / QA-003 as a dedicated, carefully-reviewed follow-up.
 5. **Mop up** ARC-015/019/021/023/028/029, QA-013/016.
 6. Re-run `/audit` to refresh AUDIT.md.
