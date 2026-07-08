@@ -4,6 +4,8 @@ All notable changes to Claude Office Visualizer are documented here.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-07
+
 ### Fixed
 
 - **Audit remediation — security hardening**: the auto-generated API key is no longer returned over HTTP by `GET /api/v1/status` (delivered to the launching user via the server console + a `?token=` launch URL the frontend reads into `sessionStorage`); `POST /sessions/{id}/focus` (terminal activation + clipboard write) now requires the key, closing a paste-jacking/CSRF vector; git invocations are hardened against hostile repos (`core.fsmonitor=false`, `core.hooksPath=/dev/null`, `GIT_CONFIG_GLOBAL=/dev/null`) with `project_root` validation; the Docker API binds to `127.0.0.1` only; and `LOG_RICH_TRACEBACKS` is now a setting (off in containers). The OpenCode plugin sends `X-API-Key` when `CLAUDE_OFFICE_API_KEY` is set. (Audit SEC-001..006.)

@@ -45,6 +45,11 @@ The application was built with [Next.js](https://nextjs.org/), [PixiJS](https://
 
 ## What's New
 
+### v0.23.0 (July 2026)
+
+- **Audit remediation (60 findings)**: Full security hardening (API key no longer disclosed over HTTP — delivered via `?token=` launch URL, `focus`/clipboard gated behind the key, git invocation hardening against hostile repos, Docker bound to loopback), a real CI workflow running `make checkall` across all four components, and the entire backend structural chain consolidated (single event-dispatch table, `ConnectionManager` moved to the domain layer with functional DI seams, `EventData` discriminated union, `BasePoller` framework, `main.py` split into middleware/migrate/websockets, bounded growth with idle eviction + replay pagination). +489 tests. See `CHANGELOG.md` and `AUDIT-REMEDIATION.md`
+- **Code quality & docs**: 76 frontend characterization tests, `useWebSocketEvents` decomposed into pure transport + domain modules, the OpenCode plugin's session-tracking extracted into a tested `SessionTracker` with real ESLint, atomic `gameStore` dequeue, named constants, a fail-safe hooks installer that preserves user edits, `VERSION`/`__version__` derived via `importlib.metadata`, and `make bump-version` automation. API authentication, the `SERVE_STATIC` gate, Command Center architecture, and complete env-var tables documented
+
 ### v0.22.0 (June 2026)
 
 - **Schedule editor cron helpers**: New pure `src/utils/cron.ts` utilities that round-trip between a friendly schedule editor and 5-field cron expressions (`timesToCron`, `intervalToCron`, `cronToEditor`)
