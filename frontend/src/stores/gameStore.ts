@@ -18,7 +18,7 @@ import type {
   WhiteboardMode,
   ConversationEntry,
 } from "@/types";
-import { DESKS_PER_ROW, MIN_DESK_COUNT } from "@/constants/positions";
+import { MIN_DESK_COUNT } from "@/constants/positions";
 
 // ============================================================================
 // SHARED STORE TYPES (ARC-005)
@@ -38,7 +38,6 @@ export type {
 import type {
   AgentPhase,
   PathState,
-  BubbleState,
   AgentAnimationState,
   CompactionAnimationPhase,
   BossAnimationState,
@@ -46,15 +45,28 @@ import type {
   ReplayFrame,
 } from "./slices/types";
 
-import { createDebugSlice, initialDebugState } from "./slices/debugSlice";
-import { createReplaySlice, initialReplayState } from "./slices/replaySlice";
+// Slices (ARC-005): each concern owns its state + actions in its own file and
+// is composed below. Cross-slice access (bubbles read boss/agent state; queues
+// re-index agents) goes through the shared `set`/`get`, typed for GameStore.
+import { createAgentSlice, initialAgentState } from "./slices/agentSlice";
+import { createQueueSlice, initialQueueState } from "./slices/queueSlice";
+import {
+  createReservationSlice,
+  initialReservationState,
+} from "./slices/reservationSlice";
+import { createBossSlice, initialBossSliceState } from "./slices/bossSlice";
+import { createBubbleSlice } from "./slices/bubbleSlice";
+import { createOfficeSlice, initialOfficeState } from "./slices/officeSlice";
 import {
   createWhiteboardSlice,
   initialWhiteboardState,
 } from "./slices/whiteboardSlice";
+import { createReplaySlice, initialReplayState } from "./slices/replaySlice";
+import { createDebugSlice, initialDebugState } from "./slices/debugSlice";
+import { createEmptyBubbleState, initialBossState } from "./slices/shared";
 
 // ============================================================================
-// STORE INTERFACE
+// STORE INTERFACE (the single public contract; impls come from the slices)
 // ============================================================================
 
 export interface GameStore {
@@ -176,7 +188,7 @@ export interface GameStore {
   conversation: ConversationEntry[];
   setConversation: (conversation: ConversationEntry[]) => void;
 
-  // Whiteboard actions (provided by whiteboardSlice)
+  // Whiteboard actions
   whiteboardData: WhiteboardData;
   whiteboardMode: WhiteboardMode;
   setWhiteboardData: (data: WhiteboardData) => void;
@@ -190,14 +202,14 @@ export interface GameStore {
   replayEvents: ReplayFrame[];
   currentReplayIndex: number;
 
-  // Debug state (provided by debugSlice)
+  // Debug state
   debugMode: boolean;
   showPaths: boolean;
   showQueueSlots: boolean;
   showPhaseLabels: boolean;
   showObstacles: boolean;
 
-  // UI actions (replay setters provided by replaySlice)
+  // UI actions
   setConnected: (connected: boolean) => void;
   setReplaying: (replaying: boolean) => void;
   setReplaySpeed: (speed: number) => void;
@@ -217,690 +229,41 @@ export interface GameStore {
 }
 
 // ============================================================================
-// CONSTANTS
+// INITIAL STATE (composed from each slice's initial fragment)
 // ============================================================================
-
-const BOSS_POSITION: Position = { x: 640, y: 900 }; // Desk center at y=960 (30*32)
-const MAX_EVENT_LOG = 500;
-
-// ============================================================================
-// INITIAL STATE
-// ============================================================================
-
-const createEmptyBubbleState = (): BubbleState => ({
-  content: null,
-  displayStartTime: null,
-  queue: [],
-});
-
-const initialBossState: BossAnimationState = {
-  backendState: "idle",
-  position: BOSS_POSITION,
-  bubble: createEmptyBubbleState(),
-  inUseBy: null,
-  currentTask: null,
-  isTyping: false,
-};
 
 const initialState = {
-  // Agents
-  agents: new Map<string, AgentAnimationState>(),
-
-  // Queues
-  arrivalQueue: [] as string[],
-  departureQueue: [] as string[],
-
-  // Queue reservations / ready occupancy (ARC-004)
-  queueReservations: {
-    arrival: new Map<number, string>(),
-    departure: new Map<number, string>(),
-  },
-  readyOccupants: { arrival: null, departure: null },
-
-  // Boss
-  boss: initialBossState,
-
-  // Office
-  sessionId: "None",
-  deskCount: MIN_DESK_COUNT,
-  elevatorState: "closed" as ElevatorState,
-  phoneState: "idle" as PhoneState,
-  contextUtilization: 0.0,
-  toolUsesSinceCompaction: 0,
-  isCompacting: false,
-  compactionPhase: "idle" as CompactionAnimationPhase,
-  printReport: false,
-  todos: [] as TodoItem[],
-  gitStatus: null as GitStatus | null,
-  eventLog: [] as EventLogEntry[],
-  conversation: [] as ConversationEntry[],
-
-  // Sliced concerns (initial values owned by each slice; composed here so the
-  // reset variants can spread a single `initialState` and preserve behavior).
+  ...initialAgentState,
+  ...initialQueueState,
+  ...initialReservationState,
+  ...initialBossSliceState,
+  ...initialOfficeState,
   ...initialWhiteboardState,
   ...initialReplayState,
   ...initialDebugState,
 };
 
 // ============================================================================
-// STORE IMPLEMENTATION
+// STORE IMPLEMENTATION (composition root)
 // ============================================================================
 
 export const useGameStore = create<GameStore>()(
   subscribeWithSelector((set, get, api) => ({
     ...initialState,
 
-    // --- Sliced concerns (ARC-005): each provides its own state + actions ---
+    // --- Slices (ARC-005): each provides its own state + actions ---
+    ...createAgentSlice(set, get, api),
+    ...createQueueSlice(set, get, api),
+    ...createReservationSlice(set, get, api),
+    ...createBossSlice(set, get, api),
+    ...createBubbleSlice(set, get, api),
+    ...createOfficeSlice(set, get, api),
     ...createWhiteboardSlice(set, get, api),
     ...createReplaySlice(set, get, api),
     ...createDebugSlice(set, get, api),
 
     // ========================================================================
-    // AGENT ACTIONS
-    // ========================================================================
-
-    addAgent: (backendAgent, initialPosition) =>
-      set((state) => {
-        const newAgents = new Map(state.agents);
-        const animState: AgentAnimationState = {
-          id: backendAgent.id,
-          name: backendAgent.name ?? null,
-          color: backendAgent.color,
-          number: backendAgent.number,
-          desk: backendAgent.desk ?? null,
-          backendState: backendAgent.state,
-          currentTask: backendAgent.currentTask ?? null,
-          characterType: backendAgent.characterType ?? null,
-          parentSessionId: backendAgent.parentSessionId ?? null,
-          parentId: backendAgent.parentId ?? null,
-          phase: "arriving",
-          currentPosition: initialPosition,
-          targetPosition: initialPosition,
-          path: null,
-          bubble: createEmptyBubbleState(),
-          queueType: null,
-          queueIndex: -1,
-          isTyping: false,
-        };
-        newAgents.set(backendAgent.id, animState);
-
-        // Update desk count if needed
-        const newDeskCount = Math.max(
-          state.deskCount,
-          Math.ceil((newAgents.size + 1) / DESKS_PER_ROW) * DESKS_PER_ROW,
-        );
-
-        return { agents: newAgents, deskCount: newDeskCount };
-      }),
-
-    removeAgent: (agentId) =>
-      set((state) => {
-        const newAgents = new Map(state.agents);
-        newAgents.delete(agentId);
-
-        // Also remove from queues
-        const newArrivalQueue = state.arrivalQueue.filter(
-          (id) => id !== agentId,
-        );
-        const newDepartureQueue = state.departureQueue.filter(
-          (id) => id !== agentId,
-        );
-
-        return {
-          agents: newAgents,
-          arrivalQueue: newArrivalQueue,
-          departureQueue: newDepartureQueue,
-        };
-      }),
-
-    updateAgentPhase: (agentId, phase) =>
-      set((state) => {
-        const agent = state.agents.get(agentId);
-        if (!agent) return state;
-
-        const newAgents = new Map(state.agents);
-        newAgents.set(agentId, { ...agent, phase });
-        return { agents: newAgents };
-      }),
-
-    updateAgentPosition: (agentId, position) =>
-      set((state) => {
-        const agent = state.agents.get(agentId);
-        if (!agent) return state;
-
-        const newAgents = new Map(state.agents);
-        newAgents.set(agentId, { ...agent, currentPosition: position });
-        return { agents: newAgents };
-      }),
-
-    updateAgentTarget: (agentId, target) =>
-      set((state) => {
-        const agent = state.agents.get(agentId);
-        if (!agent) return state;
-
-        const newAgents = new Map(state.agents);
-        newAgents.set(agentId, { ...agent, targetPosition: target });
-        return { agents: newAgents };
-      }),
-
-    updateAgentPath: (agentId, path) =>
-      set((state) => {
-        const agent = state.agents.get(agentId);
-        if (!agent) return state;
-
-        const newAgents = new Map(state.agents);
-        newAgents.set(agentId, { ...agent, path });
-        return { agents: newAgents };
-      }),
-
-    updateAgentBackendState: (agentId, backendState) =>
-      set((state) => {
-        const agent = state.agents.get(agentId);
-        if (!agent) return state;
-
-        const newAgents = new Map(state.agents);
-        newAgents.set(agentId, { ...agent, backendState });
-        return { agents: newAgents };
-      }),
-
-    updateAgentMeta: (agentId, meta) =>
-      set((state) => {
-        const agent = state.agents.get(agentId);
-        if (!agent) return state;
-
-        const newAgents = new Map(state.agents);
-        newAgents.set(agentId, {
-          ...agent,
-          backendState: meta.backendState,
-          name: meta.name ?? agent.name,
-          // `??` (not `||`) so an explicit empty-string currentTask clears the
-          // previous task — only null/undefined fall back. See QA-012.
-          currentTask: meta.currentTask ?? agent.currentTask,
-        });
-        return { agents: newAgents };
-      }),
-
-    updateAgentQueueInfo: (agentId, queueType, queueIndex) =>
-      set((state) => {
-        const agent = state.agents.get(agentId);
-        if (!agent) return state;
-
-        const newAgents = new Map(state.agents);
-        newAgents.set(agentId, { ...agent, queueType, queueIndex });
-        return { agents: newAgents };
-      }),
-
-    setAgentTyping: (agentId, isTyping) =>
-      set((state) => {
-        const agent = state.agents.get(agentId);
-        if (!agent) return state;
-
-        const newAgents = new Map(state.agents);
-        newAgents.set(agentId, { ...agent, isTyping });
-        return { agents: newAgents };
-      }),
-
-    // ========================================================================
-    // QUEUE ACTIONS
-    // ========================================================================
-
-    enqueueArrival: (agentId) =>
-      set((state) => {
-        if (state.arrivalQueue.includes(agentId)) return state;
-
-        const newQueue = [...state.arrivalQueue, agentId];
-        const queueIndex = newQueue.length - 1;
-
-        // Update agent's queue info
-        const agent = state.agents.get(agentId);
-        if (agent) {
-          const newAgents = new Map(state.agents);
-          newAgents.set(agentId, {
-            ...agent,
-            queueType: "arrival",
-            queueIndex,
-          });
-          return { arrivalQueue: newQueue, agents: newAgents };
-        }
-
-        return { arrivalQueue: newQueue };
-      }),
-
-    enqueueDeparture: (agentId) =>
-      set((state) => {
-        if (state.departureQueue.includes(agentId)) return state;
-
-        const newQueue = [...state.departureQueue, agentId];
-        const queueIndex = newQueue.length - 1;
-
-        // Update agent's queue info
-        const agent = state.agents.get(agentId);
-        if (agent) {
-          const newAgents = new Map(state.agents);
-          newAgents.set(agentId, {
-            ...agent,
-            queueType: "departure",
-            queueIndex,
-          });
-          return { departureQueue: newQueue, agents: newAgents };
-        }
-
-        return { departureQueue: newQueue };
-      }),
-
-    dequeueArrival: () => {
-      const state = get();
-      if (state.arrivalQueue.length === 0) return undefined;
-
-      const [frontId, ...rest] = state.arrivalQueue;
-
-      // Re-index remaining queued agents in the same atomic update so
-      // subscribers never observe a shifted queue with stale queueIndex
-      // values (QA-006: previously two separate `set()` calls).
-      const newAgents = new Map(state.agents);
-      rest.forEach((id, idx) => {
-        const agent = newAgents.get(id);
-        if (agent) {
-          newAgents.set(id, { ...agent, queueIndex: idx });
-        }
-      });
-      set({ arrivalQueue: rest, agents: newAgents });
-
-      return frontId;
-    },
-
-    dequeueDeparture: () => {
-      const state = get();
-      if (state.departureQueue.length === 0) return undefined;
-
-      const [frontId, ...rest] = state.departureQueue;
-
-      // Re-index remaining queued agents in the same atomic update so
-      // subscribers never observe a shifted queue with stale queueIndex
-      // values (QA-006: previously two separate `set()` calls).
-      const newAgents = new Map(state.agents);
-      rest.forEach((id, idx) => {
-        const agent = newAgents.get(id);
-        if (agent) {
-          newAgents.set(id, { ...agent, queueIndex: idx });
-        }
-      });
-      set({ departureQueue: rest, agents: newAgents });
-
-      return frontId;
-    },
-
-    advanceQueue: (queueType) =>
-      set((state) => {
-        const queue =
-          queueType === "arrival" ? state.arrivalQueue : state.departureQueue;
-        if (queue.length === 0) return state;
-
-        // Update all agents' queue indices
-        const newAgents = new Map(state.agents);
-        queue.forEach((id, idx) => {
-          const agent = newAgents.get(id);
-          if (agent) {
-            newAgents.set(id, { ...agent, queueIndex: idx });
-          }
-        });
-
-        return { agents: newAgents };
-      }),
-
-    syncQueues: (arrivalQueue, departureQueue) =>
-      set((state) => {
-        // Update agents' queue info based on synced queues
-        const newAgents = new Map(state.agents);
-
-        arrivalQueue.forEach((id, idx) => {
-          const agent = newAgents.get(id);
-          if (agent) {
-            newAgents.set(id, {
-              ...agent,
-              queueType: "arrival",
-              queueIndex: idx,
-            });
-          }
-        });
-
-        departureQueue.forEach((id, idx) => {
-          const agent = newAgents.get(id);
-          if (agent) {
-            newAgents.set(id, {
-              ...agent,
-              queueType: "departure",
-              queueIndex: idx,
-            });
-          }
-        });
-
-        return {
-          arrivalQueue,
-          departureQueue,
-          agents: newAgents,
-        };
-      }),
-
-    // ========================================================================
-    // QUEUE RESERVATIONS (ARC-004: single writer; QueueManager is the sole caller)
-    // ========================================================================
-
-    setQueueReservation: (queueType, slotIndex, agentId) =>
-      set((state) => {
-        const next = new Map(state.queueReservations[queueType]);
-        next.set(slotIndex, agentId);
-        return {
-          queueReservations: { ...state.queueReservations, [queueType]: next },
-        };
-      }),
-
-    clearQueueReservation: (queueType, agentId) =>
-      set((state) => {
-        const next = new Map(state.queueReservations[queueType]);
-        let removed = false;
-        for (const [pos, reservedBy] of next) {
-          if (reservedBy === agentId) {
-            next.delete(pos);
-            removed = true;
-            break;
-          }
-        }
-        return removed
-          ? {
-              queueReservations: {
-                ...state.queueReservations,
-                [queueType]: next,
-              },
-            }
-          : state;
-      }),
-
-    clearAgentReservations: (agentId) =>
-      set((state) => {
-        let changed = false;
-        const nextReservations = {
-          arrival: new Map(state.queueReservations.arrival),
-          departure: new Map(state.queueReservations.departure),
-        };
-        for (const qt of ["arrival", "departure"] as const) {
-          for (const [pos, reservedBy] of nextReservations[qt]) {
-            if (reservedBy === agentId) {
-              nextReservations[qt].delete(pos);
-              changed = true;
-              break;
-            }
-          }
-        }
-        return changed ? { queueReservations: nextReservations } : state;
-      }),
-
-    resetQueueReservations: () =>
-      set({
-        queueReservations: {
-          arrival: new Map(),
-          departure: new Map(),
-        },
-        readyOccupants: { arrival: null, departure: null },
-      }),
-
-    setReadyOccupant: (queueType, agentId) =>
-      set((state) => ({
-        readyOccupants: { ...state.readyOccupants, [queueType]: agentId },
-      })),
-
-    // ========================================================================
-    // BOSS ACTIONS
-    // ========================================================================
-
-    updateBossBackendState: (backendState) =>
-      set((state) => ({
-        boss: { ...state.boss, backendState },
-      })),
-
-    updateBossTask: (task) =>
-      set((state) => ({
-        boss: { ...state.boss, currentTask: task },
-      })),
-
-    setBossInUse: (by) =>
-      set((state) => ({
-        boss: { ...state.boss, inUseBy: by },
-      })),
-
-    setBossTyping: (typing) =>
-      set((state) => ({
-        boss: { ...state.boss, isTyping: typing },
-      })),
-
-    // ========================================================================
-    // BUBBLE ACTIONS
-    // ========================================================================
-
-    enqueueBubble: (entityId, content, options) =>
-      set((state) => {
-        const now = Date.now();
-
-        if (entityId === "boss") {
-          const bossBubble = state.boss.bubble;
-          // Queue bubbles instead of displaying immediately in these cases:
-          // 1. During compaction (boss is jumping on trash) - unless immediate flag
-          // 2. There's already a bubble displaying
-          // The immediate flag is used for conversation bubbles that need to
-          // proceed normally to avoid blocking the agent state machine.
-          const isCompacting = state.compactionPhase !== "idle";
-          const shouldQueueForCompaction = isCompacting && !options?.immediate;
-          const shouldQueue = shouldQueueForCompaction || bossBubble.content;
-
-          if (!shouldQueue) {
-            // No current bubble and not compacting, display immediately
-            // IMPORTANT: Preserve any existing queued bubbles (e.g., from compaction)
-            return {
-              boss: {
-                ...state.boss,
-                bubble: {
-                  content,
-                  displayStartTime: now,
-                  queue: bossBubble.queue,
-                },
-              },
-            };
-          }
-          // Queue it (compacting or already has a bubble displaying)
-          return {
-            boss: {
-              ...state.boss,
-              bubble: {
-                ...bossBubble,
-                queue: [...bossBubble.queue, content],
-              },
-            },
-          };
-        }
-
-        // Agent bubble
-        const agent = state.agents.get(entityId);
-        if (!agent) return state;
-
-        const agentBubble = agent.bubble;
-        const newAgents = new Map(state.agents);
-
-        if (!agentBubble.content) {
-          // IMPORTANT: Preserve any existing queued bubbles
-          newAgents.set(entityId, {
-            ...agent,
-            bubble: {
-              content,
-              displayStartTime: now,
-              queue: agentBubble.queue,
-            },
-          });
-        } else {
-          newAgents.set(entityId, {
-            ...agent,
-            bubble: {
-              ...agentBubble,
-              queue: [...agentBubble.queue, content],
-            },
-          });
-        }
-
-        return { agents: newAgents };
-      }),
-
-    advanceBubble: (entityId) =>
-      set((state) => {
-        const now = Date.now();
-
-        if (entityId === "boss") {
-          const bossBubble = state.boss.bubble;
-          if (bossBubble.queue.length > 0) {
-            const [next, ...rest] = bossBubble.queue;
-            return {
-              boss: {
-                ...state.boss,
-                bubble: {
-                  content: next,
-                  displayStartTime: now,
-                  queue: rest,
-                },
-              },
-            };
-          }
-          // Clear bubble
-          return {
-            boss: {
-              ...state.boss,
-              bubble: createEmptyBubbleState(),
-            },
-          };
-        }
-
-        // Agent bubble
-        const agent = state.agents.get(entityId);
-        if (!agent) return state;
-
-        const agentBubble = agent.bubble;
-        const newAgents = new Map(state.agents);
-
-        if (agentBubble.queue.length > 0) {
-          const [next, ...rest] = agentBubble.queue;
-          newAgents.set(entityId, {
-            ...agent,
-            bubble: {
-              content: next,
-              displayStartTime: now,
-              queue: rest,
-            },
-          });
-        } else {
-          newAgents.set(entityId, {
-            ...agent,
-            bubble: createEmptyBubbleState(),
-          });
-        }
-
-        return { agents: newAgents };
-      }),
-
-    clearBubbles: (entityId) =>
-      set((state) => {
-        if (entityId === "boss") {
-          return {
-            boss: {
-              ...state.boss,
-              bubble: createEmptyBubbleState(),
-            },
-          };
-        }
-
-        const agent = state.agents.get(entityId);
-        if (!agent) return state;
-
-        const newAgents = new Map(state.agents);
-        newAgents.set(entityId, {
-          ...agent,
-          bubble: createEmptyBubbleState(),
-        });
-
-        return { agents: newAgents };
-      }),
-
-    getCurrentBubble: (entityId) => {
-      const state = get();
-      if (entityId === "boss") {
-        return state.boss.bubble.content;
-      }
-      return state.agents.get(entityId)?.bubble.content ?? null;
-    },
-
-    isBubbleQueueEmpty: (entityId) => {
-      const state = get();
-      if (entityId === "boss") {
-        const b = state.boss.bubble;
-        return !b.content && b.queue.length === 0;
-      }
-      const agent = state.agents.get(entityId);
-      if (!agent) return true;
-      return !agent.bubble.content && agent.bubble.queue.length === 0;
-    },
-
-    hasBubbleText: (entityId, text) => {
-      const state = get();
-      const bubble =
-        entityId === "boss"
-          ? state.boss.bubble
-          : state.agents.get(entityId)?.bubble;
-      if (!bubble) return false;
-      // Check current content
-      if (bubble.content?.text === text) return true;
-      // Check queue
-      return bubble.queue.some((b) => b.text === text);
-    },
-
-    // ========================================================================
-    // OFFICE ACTIONS
-    // ========================================================================
-
-    setSessionId: (id) => set({ sessionId: id }),
-    setElevatorState: (elevatorState) => set({ elevatorState }),
-    setPhoneState: (phoneState) => set({ phoneState }),
-    setDeskCount: (deskCount) => set({ deskCount }),
-    setContextUtilization: (contextUtilization) =>
-      // Only update context utilization - don't reset compaction state
-      // The compaction animation system controls when compaction ends via setCompactionPhase
-      set({ contextUtilization }),
-    setToolUsesSinceCompaction: (toolUsesSinceCompaction) =>
-      set({ toolUsesSinceCompaction }),
-    triggerCompaction: () => {
-      // Start compaction animation - boss will walk to trash can and jump on it
-      set({
-        isCompacting: true,
-        toolUsesSinceCompaction: 0,
-        compactionPhase: "walking_to_trash",
-      });
-    },
-    setCompactionPhase: (compactionPhase) => set({ compactionPhase }),
-    setIsCompacting: (isCompacting) => set({ isCompacting }),
-    setTodos: (todos) => set({ todos }),
-    setPrintReport: (printReport) => set({ printReport }),
-    setGitStatus: (gitStatus) => set({ gitStatus }),
-
-    addEventLog: (event) =>
-      set((state) => {
-        const timestamp = event.timestamp
-          ? new Date(event.timestamp)
-          : new Date();
-        const entry: EventLogEntry = { ...event, timestamp };
-        return {
-          eventLog: [entry, ...state.eventLog.slice(0, MAX_EVENT_LOG - 1)],
-        };
-      }),
-
-    setConversation: (conversation) => set({ conversation }),
-
-    // ========================================================================
-    // TOP-LEVEL ACTIONS
+    // TOP-LEVEL ACTIONS (cross-cutting: reset variants reconcile every slice)
     // ========================================================================
 
     reset: () =>
