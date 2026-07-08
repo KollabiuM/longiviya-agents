@@ -42,7 +42,8 @@ Configuration is via environment variables.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CLAUDE_OFFICE_API_URL` | `http://localhost:8000/api/v1/events` | Backend API endpoint |
+| `CLAUDE_OFFICE_API_URL` | `http://localhost:8000/api/v1/events` | Backend API endpoint. Non-localhost values are reset to the default unless `CLAUDE_OFFICE_ALLOW_REMOTE=1` |
+| `CLAUDE_OFFICE_ALLOW_REMOTE` | `0` | Set to `1` to permit a non-localhost backend (opt-in; payloads carry tool I/O and file paths) |
 | `CLAUDE_OFFICE_TIMEOUT_MS` | `1500` | HTTP request timeout in milliseconds |
 | `CLAUDE_OFFICE_DEBUG` | `0` | Set to `1` to log events to stderr |
 | `CLAUDE_OFFICE_API_KEY` | _(unset)_ | API key sent as `X-API-Key`. Required when the backend is started with an explicit `CLAUDE_OFFICE_API_KEY`; leave unset otherwise. |

@@ -72,6 +72,25 @@ def log_error(error: Exception, context: str = "") -> None:
         pass
 
 
+def log_notice(message: str, context: str = "") -> None:
+    """Write a single non-error informational line to the debug log file.
+
+    For config-time notices (e.g. the ARC-020 loopback clamp) that aren't
+    exceptions and so don't warrant ``log_error``'s traceback block.
+    Never raises.
+    """
+    try:
+        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = get_iso_timestamp()
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"\n{'-' * 60}\n")
+            f.write(f"[{timestamp}] NOTICE: {context}\n")
+            f.write(f"{message}\n")
+            f.write(f"{'-' * 60}\n")
+    except Exception:
+        pass
+
+
 def debug_log(
     event_type: str,
     raw_data: dict[str, Any],

@@ -30,8 +30,57 @@ import { SessionTracker } from "./sessionTracker";
 // Configuration
 // ---------------------------------------------------------------------------
 
-const API_URL =
-  process.env.CLAUDE_OFFICE_API_URL ?? "http://localhost:8000/api/v1/events";
+const DEFAULT_API_URL = "http://localhost:8000/api/v1/events";
+
+/**
+ * Resolve the backend event endpoint, applying the loopback clamp (ARC-020).
+ * Mirrors hooks/src/claude_office_hooks/config.py:_resolve_api_url so both
+ * producers treat CLAUDE_OFFICE_API_URL identically: a non-localhost URL is
+ * reset to the local default unless CLAUDE_OFFICE_ALLOW_REMOTE=1. Event
+ * payloads carry tool inputs/outputs and file paths, so this guards against
+ * accidental exfiltration to an attacker-controlled URL. Exported for tests.
+ */
+export function resolveApiUrl(
+  rawUrl: string,
+  allowRemote: boolean,
+  onClamp: (host: string) => void,
+): string {
+  let host: string;
+  try {
+    host = new URL(rawUrl).hostname;
+  } catch {
+    // Malformed URL — surface as a fetch failure rather than silently
+    // redirecting. Treat as local (matches hooks' None-hostname handling).
+    return rawUrl;
+  }
+  // Node includes brackets on IPv6 literals ("[::1]"); Python's urlparse does
+  // not. Strip them so the loopback check matches the hooks.
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  const isLocalhost =
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "";
+  if (isLocalhost) return rawUrl;
+  if (allowRemote) return rawUrl;
+  onClamp(host);
+  return DEFAULT_API_URL;
+}
+
+const API_URL = resolveApiUrl(
+  process.env.CLAUDE_OFFICE_API_URL ?? DEFAULT_API_URL,
+  process.env.CLAUDE_OFFICE_ALLOW_REMOTE === "1",
+  (host) => {
+    // Read the env directly: the DEBUG const below is initialized AFTER this
+    // line, so referencing it here would hit the temporal dead zone.
+    if (process.env.CLAUDE_OFFICE_DEBUG === "1") {
+      console.error(
+        `[claude-office] CLAUDE_OFFICE_API_URL is non-localhost ('${host}'); ` +
+          "clamped to local default. Set CLAUDE_OFFICE_ALLOW_REMOTE=1 to allow a remote backend.",
+      );
+    }
+  },
+);
 
 /** HTTP timeout in milliseconds — keep short so hooks never block OpenCode. */
 const TIMEOUT_MS = Number(process.env.CLAUDE_OFFICE_TIMEOUT_MS ?? "1500");

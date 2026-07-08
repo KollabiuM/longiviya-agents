@@ -58,7 +58,9 @@ try:
         (``HTTPRedirectHandler``) for remote http backends while never
         constructing an SSL context, so the crash can't happen. ``https`` URLs
         keep the standard opener (SSL expected) so remote deployments still
-        work.
+        work. (Remote backends are opt-in: ``config.py`` clamps
+        ``CLAUDE_OFFICE_API_URL`` to localhost unless
+        ``CLAUDE_OFFICE_ALLOW_REMOTE=1`` is set — ARC-020.)
 
         ``build_opener()`` is intentionally avoided: it always adds
         ``HTTPSHandler``, which would re-trigger the context creation.

@@ -109,9 +109,11 @@ CLAUDE_OFFICE_STRIP_PREFIXES="-Users-probello-Repos-,-Users-probello-"
 # Set to 1 to enable debug logging
 CLAUDE_OFFICE_DEBUG=0
 
-# Backend API endpoint. Non-localhost values are currently ignored and reset
-# to the default below (loopback-only clamp).
+# Backend API endpoint. Non-localhost values are reset to the default below
+# unless CLAUDE_OFFICE_ALLOW_REMOTE=1 is set (loopback-only clamp, ARC-020).
 # CLAUDE_OFFICE_API_URL=http://localhost:8000/api/v1/events
+# Remote backends are opt-in: event payloads carry tool I/O and file paths.
+# CLAUDE_OFFICE_ALLOW_REMOTE=0
 
 # Optional: API key for a backend started with CLAUDE_OFFICE_API_KEY. When set
 # (here or as an environment variable — env wins), the hook sends it as
@@ -123,7 +125,8 @@ CLAUDE_OFFICE_DEBUG=0
 |----------|---------|-------------|
 | `CLAUDE_OFFICE_STRIP_PREFIXES` | `-Users-probello-Repos-,-Users-probello-` | Comma-separated path prefixes stripped from project names |
 | `CLAUDE_OFFICE_DEBUG` | `0` | Set to `1` to write debug logs to `~/.claude/claude-office-hooks.log` |
-| `CLAUDE_OFFICE_API_URL` | `http://localhost:8000/api/v1/events` | Backend event endpoint. Non-localhost values are currently ignored and reset to the default. |
+| `CLAUDE_OFFICE_API_URL` | `http://localhost:8000/api/v1/events` | Backend event endpoint. Non-localhost values are reset to the default unless `CLAUDE_OFFICE_ALLOW_REMOTE=1`. |
+| `CLAUDE_OFFICE_ALLOW_REMOTE` | `0` | Set to `1` to permit a non-localhost backend (e.g. a remote/dedicated server). Off by default since event payloads carry tool I/O and file paths. |
 | `CLAUDE_OFFICE_API_KEY` | (empty) | API key sent as `X-API-Key`. Required when the backend sets an explicit `CLAUDE_OFFICE_API_KEY`; env var takes precedence over the config file. |
 
 ### Strip Prefixes

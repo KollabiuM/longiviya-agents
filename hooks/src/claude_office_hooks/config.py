@@ -5,6 +5,7 @@ Output suppression is handled in main.py before this module is imported.
 """
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -13,12 +14,55 @@ from urllib.parse import urlparse
 # ---------------------------------------------------------------------------
 
 _LOCALHOST_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1", None})
+_DEFAULT_API_URL = "http://localhost:8000/api/v1/events"
 
-_raw_api_url = os.environ.get("CLAUDE_OFFICE_API_URL", "http://localhost:8000/api/v1/events")
-_parsed_url = urlparse(_raw_api_url)
-if _parsed_url.hostname not in _LOCALHOST_HOSTNAMES:
-    _raw_api_url = "http://localhost:8000/api/v1/events"
-API_URL = _raw_api_url
+
+def _resolve_api_url(
+    raw_url: str,
+    allow_remote: bool,
+    on_clamp: Callable[[str | None], None],
+) -> str:
+    """Return the API URL to use, applying the loopback clamp (ARC-020).
+
+    Remote backends are opt-in: a non-localhost URL is reset to the local
+    default unless ``allow_remote`` is True. Event payloads can carry tool
+    inputs/outputs and file paths, so this guards against accidental
+    exfiltration to an attacker-controlled URL. Mirrored by the OpenCode
+    plugin's resolver so both producers treat ``CLAUDE_OFFICE_API_URL``
+    identically. Pure + testable; the caller supplies the clamp callback so
+    this module never writes to stdout/stderr at import time.
+    """
+    host = urlparse(raw_url).hostname
+    if host in _LOCALHOST_HOSTNAMES:
+        return raw_url
+    if allow_remote:
+        return raw_url
+    on_clamp(host)
+    return _DEFAULT_API_URL
+
+
+def _log_clamp(host: str | None) -> None:
+    """Record the loopback clamp to the debug log file (never stdout/stderr)."""
+    try:
+        # Lazy import keeps config.py importable in isolation.
+        from claude_office_hooks.debug_logger import log_notice
+
+        log_notice(
+            f"CLAUDE_OFFICE_API_URL is non-localhost ('{host}'); clamped to the "
+            f"local default. Set CLAUDE_OFFICE_ALLOW_REMOTE=1 to use a remote "
+            f"backend.",
+            context="config",
+        )
+    except Exception:
+        # Logging must never break the hook.
+        pass
+
+
+API_URL = _resolve_api_url(
+    os.environ.get("CLAUDE_OFFICE_API_URL", _DEFAULT_API_URL),
+    os.environ.get("CLAUDE_OFFICE_ALLOW_REMOTE", "") == "1",
+    _log_clamp,
+)
 
 # Mutable holder for the API key — populated by load_config().
 _api_key_holder: list[str] = [""]

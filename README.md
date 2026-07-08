@@ -249,7 +249,8 @@ make opencode-uninstall
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CLAUDE_OFFICE_API_URL` | `http://localhost:8000/api/v1/events` | Backend API endpoint |
+| `CLAUDE_OFFICE_API_URL` | `http://localhost:8000/api/v1/events` | Backend API endpoint. Non-localhost values are reset to the default unless `CLAUDE_OFFICE_ALLOW_REMOTE=1` |
+| `CLAUDE_OFFICE_ALLOW_REMOTE` | `0` | Set to `1` to permit a non-localhost backend (hooks + OpenCode plugin; opt-in since payloads carry tool I/O and file paths) |
 | `CLAUDE_OFFICE_TIMEOUT_MS` | `1500` | HTTP request timeout |
 | `CLAUDE_OFFICE_DEBUG` | `0` | Set to `1` to log events to stderr |
 
