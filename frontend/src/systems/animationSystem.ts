@@ -393,41 +393,18 @@ class AnimationSystem {
   // QUEUE ADVANCEMENT
   // ==========================================================================
 
-  private bossLockedSince: number | null = null;
   private lastNotifiedAgentId: string | null = null;
 
   private checkQueueAdvancement(): void {
     const store = useGameStore.getState();
 
-    // If boss is in use, check if any agent is actually interacting with them.
-    // If not, the boss is stuck — auto-release after a grace period.
+    // The queue must not advance while the boss is busy with an agent. With
+    // single-writer queue ownership (ARC-004) the boss lock can no longer leak,
+    // so the previous 3-second "stuck boss" auto-release watchdog is gone.
     if (store.boss.inUseBy !== null) {
       this.lastNotifiedAgentId = null;
-      const BOSS_INTERACTION_PHASES = new Set([
-        "walking_to_ready",
-        "conversing",
-        "walking_to_boss",
-        "at_boss",
-        "walking_to_desk",
-        "walking_to_elevator",
-      ]);
-      const hasInteractingAgent = Array.from(store.agents.values()).some((a) =>
-        BOSS_INTERACTION_PHASES.has(a.phase),
-      );
-      if (!hasInteractingAgent) {
-        if (this.bossLockedSince === null) {
-          this.bossLockedSince = Date.now();
-        } else if (Date.now() - this.bossLockedSince > 3000) {
-          console.warn("[AnimationSystem] Auto-releasing stuck boss lock");
-          store.setBossInUse(null);
-          this.bossLockedSince = null;
-        }
-      } else {
-        this.bossLockedSince = null;
-      }
       return;
     }
-    this.bossLockedSince = null;
 
     // Priority: arrival queue first
     if (store.arrivalQueue.length > 0) {
