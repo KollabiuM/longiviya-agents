@@ -1,42 +1,29 @@
 /**
  * Queue Manager
  *
- * Encapsulates queue reservation tracking and ready-position occupancy
- * for both the arrival and departure queues.
+ * Stateless policy façade over the store's queue-reservation / ready-occupancy
+ * state (ARC-004). Previously this class held the reservation/occupancy maps as
+ * private fields, making it a second writer alongside the Zustand store and the
+ * source of queue-slot-collision / stuck-state bugs. All such state now lives
+ * exclusively in the store; this class only reads it and issues store actions.
  *
- * Extracted from AgentMachineService so that queue logic can be
- * reasoned about and tested independently of the machine lifecycle.
+ * The public API is unchanged so call sites in AgentMachineService need no edits.
+ * Reservation/occupancy policy (slot-index math, "find by agentId" reads) stays
+ * here; the store is the single writer.
+ *
+ * Extracted from AgentMachineService so that queue logic can be reasoned about
+ * and tested independently of the machine lifecycle.
  */
 
 import { getQueuePosition } from "@/systems/queuePositions";
-import { animationSystem } from "@/systems/animationSystem";
 import { useGameStore } from "@/stores/gameStore";
+import type { Position } from "@/types";
 
 // ============================================================================
 // QUEUE MANAGER
 // ============================================================================
 
 export class QueueManager {
-  /**
-   * Reserved queue positions for agents walking to a queue slot.
-   * Prevents race conditions where two agents try to claim the same slot.
-   * Key: "arrival" | "departure"  Value: Map<positionIndex → agentId>
-   */
-  private reservations: Map<string, Map<number, string>> = new Map([
-    ["arrival", new Map()],
-    ["departure", new Map()],
-  ]);
-
-  /**
-   * Which agent is currently at or walking to the ready position (A0/D0).
-   * Prevents multiple agents from stacking at the ready position.
-   * Key: "arrival" | "departure"  Value: agentId | null
-   */
-  private readyOccupant: Map<string, string | null> = new Map([
-    ["arrival", null],
-    ["departure", null],
-  ]);
-
   // ==========================================================================
   // RESERVATION API
   // ==========================================================================
@@ -52,7 +39,7 @@ export class QueueManager {
     const store = useGameStore.getState();
     const queue =
       queueType === "arrival" ? store.arrivalQueue : store.departureQueue;
-    const reservations = this.reservations.get(queueType)!;
+    const reservations = store.queueReservations[queueType];
 
     // Count reservations held by OTHER agents
     let reservationCount = 0;
@@ -64,7 +51,7 @@ export class QueueManager {
 
     // New agent always joins at the back
     const slotIndex = queue.length + reservationCount + 1;
-    reservations.set(slotIndex, agentId);
+    store.setQueueReservation(queueType, slotIndex, agentId);
     return slotIndex;
   }
 
@@ -73,27 +60,14 @@ export class QueueManager {
    * at their queue position and formally join the queue).
    */
   clearReservation(agentId: string, queueType: "arrival" | "departure"): void {
-    const reservations = this.reservations.get(queueType)!;
-    for (const [posIndex, reservedBy] of reservations.entries()) {
-      if (reservedBy === agentId) {
-        reservations.delete(posIndex);
-        break;
-      }
-    }
+    useGameStore.getState().clearQueueReservation(queueType, agentId);
   }
 
   /**
    * Clear ALL reservations held by a specific agent across both queues.
    */
   clearAllReservations(agentId: string): void {
-    for (const reservations of this.reservations.values()) {
-      for (const [posIndex, reservedBy] of reservations.entries()) {
-        if (reservedBy === agentId) {
-          reservations.delete(posIndex);
-          break;
-        }
-      }
-    }
+    useGameStore.getState().clearAgentReservations(agentId);
   }
 
   /**
@@ -103,7 +77,7 @@ export class QueueManager {
     agentId: string,
     queueType: "arrival" | "departure",
   ): number {
-    const reservations = this.reservations.get(queueType)!;
+    const reservations = useGameStore.getState().queueReservations[queueType];
     for (const [posIndex, reservedBy] of reservations.entries()) {
       if (reservedBy === agentId) return posIndex;
     }
@@ -121,20 +95,20 @@ export class QueueManager {
     agentId: string,
     queueType: "arrival" | "departure",
   ): void {
-    this.readyOccupant.set(queueType, agentId);
+    useGameStore.getState().setReadyOccupant(queueType, agentId);
   }
 
   /**
    * Release the ready position for a queue type.
-   * Returns the agentId that was occupying it, or null.
+   * Returns true if this agent was the occupant (and is now cleared).
    */
   releaseReadyPosition(
     agentId: string,
     queueType: "arrival" | "departure",
   ): boolean {
-    const current = this.readyOccupant.get(queueType);
-    if (current === agentId) {
-      this.readyOccupant.set(queueType, null);
+    const store = useGameStore.getState();
+    if (store.readyOccupants[queueType] === agentId) {
+      store.setReadyOccupant(queueType, null);
       return true;
     }
     return false;
@@ -147,10 +121,12 @@ export class QueueManager {
   releaseReadyPositionForAgent(
     agentId: string,
   ): "arrival" | "departure" | null {
-    for (const [queueType, occupant] of this.readyOccupant.entries()) {
-      if (occupant === agentId) {
-        this.readyOccupant.set(queueType, null);
-        return queueType as "arrival" | "departure";
+    const store = useGameStore.getState();
+    const occupants = store.readyOccupants;
+    for (const queueType of ["arrival", "departure"] as const) {
+      if (occupants[queueType] === agentId) {
+        store.setReadyOccupant(queueType, null);
+        return queueType;
       }
     }
     return null;
@@ -160,7 +136,7 @@ export class QueueManager {
    * Return the current occupant of the ready position, or null.
    */
   getReadyOccupant(queueType: "arrival" | "departure"): string | null {
-    return this.readyOccupant.get(queueType) ?? null;
+    return useGameStore.getState().readyOccupants[queueType];
   }
 
   // ==========================================================================
@@ -169,7 +145,9 @@ export class QueueManager {
 
   /**
    * Recalculate queue positions for all agents in a queue after one leaves,
-   * sending them to their new physical slot via the animation system.
+   * sending them to their new physical slot. ``setAgentPath`` is supplied by
+   * the caller (AgentMachineService) so this module does not import the
+   * animation system (ARC-017/ARC-004 cycle break).
    */
   updateQueueIndices(
     queueType: "arrival" | "departure",
@@ -177,6 +155,7 @@ export class QueueManager {
       agentId: string,
       event: { type: "QUEUE_POSITION_CHANGED"; newIndex: number },
     ) => void,
+    setAgentPath: (agentId: string, target: Position) => void,
   ): void {
     const store = useGameStore.getState();
     const queue =
@@ -195,7 +174,7 @@ export class QueueManager {
       if (newPosition) {
         store.updateAgentTarget(agentId, newPosition);
         store.updateAgentQueueInfo(agentId, queueType, index);
-        animationSystem.setAgentPath(agentId, newPosition);
+        setAgentPath(agentId, newPosition);
       }
     });
   }
@@ -205,12 +184,10 @@ export class QueueManager {
   // ==========================================================================
 
   /**
-   * Clear all state — called when the service resets.
+   * Clear all reservation/occupancy state — called when the service resets.
+   * Delegates to the store (single writer).
    */
   reset(): void {
-    this.reservations.get("arrival")!.clear();
-    this.reservations.get("departure")!.clear();
-    this.readyOccupant.set("arrival", null);
-    this.readyOccupant.set("departure", null);
+    useGameStore.getState().resetQueueReservations();
   }
 }

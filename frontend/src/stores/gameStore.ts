@@ -176,6 +176,34 @@ interface GameStore {
   advanceQueue: (queueType: "arrival" | "departure") => void;
   syncQueues: (arrivalQueue: string[], departureQueue: string[]) => void;
 
+  // ========== Queue Reservations (ARC-004: single writer) ==========
+  // Slots agents are walking toward but haven't formally joined yet, so two
+  // agents never claim the same physical slot. Key: slot index -> agentId.
+  queueReservations: {
+    arrival: Map<number, string>;
+    departure: Map<number, string>;
+  };
+  // Which agent occupies (or is walking to) the ready position A0/D0.
+  readyOccupants: { arrival: string | null; departure: string | null };
+
+  // Reservation mutators. QueueManager is the sole caller (stateless façade);
+  // these are the only writes to the above state.
+  setQueueReservation: (
+    queueType: "arrival" | "departure",
+    slotIndex: number,
+    agentId: string,
+  ) => void;
+  clearQueueReservation: (
+    queueType: "arrival" | "departure",
+    agentId: string,
+  ) => void;
+  clearAgentReservations: (agentId: string) => void;
+  resetQueueReservations: () => void;
+  setReadyOccupant: (
+    queueType: "arrival" | "departure",
+    agentId: string | null,
+  ) => void;
+
   // ========== Boss State ==========
   boss: BossAnimationState;
 
@@ -353,6 +381,13 @@ const initialState = {
   // Queues
   arrivalQueue: [] as string[],
   departureQueue: [] as string[],
+
+  // Queue reservations / ready occupancy (ARC-004)
+  queueReservations: {
+    arrival: new Map<number, string>(),
+    departure: new Map<number, string>(),
+  },
+  readyOccupants: { arrival: null, departure: null },
 
   // Boss
   boss: initialBossState,
@@ -685,6 +720,73 @@ export const useGameStore = create<GameStore>()(
           agents: newAgents,
         };
       }),
+
+    // ========================================================================
+    // QUEUE RESERVATIONS (ARC-004: single writer; QueueManager is the sole caller)
+    // ========================================================================
+
+    setQueueReservation: (queueType, slotIndex, agentId) =>
+      set((state) => {
+        const next = new Map(state.queueReservations[queueType]);
+        next.set(slotIndex, agentId);
+        return {
+          queueReservations: { ...state.queueReservations, [queueType]: next },
+        };
+      }),
+
+    clearQueueReservation: (queueType, agentId) =>
+      set((state) => {
+        const next = new Map(state.queueReservations[queueType]);
+        let removed = false;
+        for (const [pos, reservedBy] of next) {
+          if (reservedBy === agentId) {
+            next.delete(pos);
+            removed = true;
+            break;
+          }
+        }
+        return removed
+          ? {
+              queueReservations: {
+                ...state.queueReservations,
+                [queueType]: next,
+              },
+            }
+          : state;
+      }),
+
+    clearAgentReservations: (agentId) =>
+      set((state) => {
+        let changed = false;
+        const nextReservations = {
+          arrival: new Map(state.queueReservations.arrival),
+          departure: new Map(state.queueReservations.departure),
+        };
+        for (const qt of ["arrival", "departure"] as const) {
+          for (const [pos, reservedBy] of nextReservations[qt]) {
+            if (reservedBy === agentId) {
+              nextReservations[qt].delete(pos);
+              changed = true;
+              break;
+            }
+          }
+        }
+        return changed ? { queueReservations: nextReservations } : state;
+      }),
+
+    resetQueueReservations: () =>
+      set({
+        queueReservations: {
+          arrival: new Map(),
+          departure: new Map(),
+        },
+        readyOccupants: { arrival: null, departure: null },
+      }),
+
+    setReadyOccupant: (queueType, agentId) =>
+      set((state) => ({
+        readyOccupants: { ...state.readyOccupants, [queueType]: agentId },
+      })),
 
     // ========================================================================
     // BOSS ACTIONS
@@ -1045,6 +1147,11 @@ export const useGameStore = create<GameStore>()(
         agents: new Map(),
         arrivalQueue: [],
         departureQueue: [],
+        queueReservations: {
+          arrival: new Map(),
+          departure: new Map(),
+        },
+        readyOccupants: { arrival: null, departure: null },
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
         sessionId: "None",
         deskCount: MIN_DESK_COUNT,

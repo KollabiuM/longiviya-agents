@@ -241,8 +241,10 @@ class AgentMachineService implements AnimationListener {
    * Update queue indices for all agents in a queue and move them to new positions.
    */
   updateQueueIndices(queueType: "arrival" | "departure"): void {
-    this.queue.updateQueueIndices(queueType, (agentId, event) =>
-      this.sendEvent(agentId, event),
+    this.queue.updateQueueIndices(
+      queueType,
+      (agentId, event) => this.sendEvent(agentId, event),
+      (agentId, target) => animationSystem.setAgentPath(agentId, target),
     );
   }
 
