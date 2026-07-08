@@ -1,10 +1,13 @@
-"""Tests for summary service fallback methods.
-
-These tests focus on the non-AI fallback methods that can be tested without mocking.
-"""
+"""Tests for summary service fallback methods and pluggable backends."""
 
 # pyright: reportPrivateUsage=false
 
+import asyncio
+import shutil
+from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
+
+import httpx
 import pytest
 
 from app.core.summary_service import SummaryService
@@ -12,9 +15,14 @@ from app.core.summary_service import SummaryService
 
 @pytest.fixture
 def service() -> SummaryService:
-    """Create a summary service instance with AI disabled."""
-    # Service will be disabled since no CLAUDE_CODE_OAUTH_TOKEN is set
-    return SummaryService()
+    """Create a summary service instance with AI disabled.
+
+    Forced disabled so fallback paths are exercised deterministically,
+    independent of whether a ``claude`` CLI happens to be on PATH on the host.
+    """
+    svc = SummaryService()
+    svc.enabled = False
+    return svc
 
 
 class TestExtractFirstSentence:
@@ -195,3 +203,203 @@ class TestSummarizeUserPrompt:
         prompt = "Too    many     spaces"
         result = await service.summarize_user_prompt(prompt)
         assert "  " not in result
+
+
+# ---------------------------------------------------------------------------
+# Pluggable backend tests (claude-cli subprocess + openai-compatible httpx).
+# ---------------------------------------------------------------------------
+
+
+def _fake_settings(**overrides: object) -> SimpleNamespace:
+    """Build a Settings-like object exposing the fields the runners read."""
+    base: dict[str, object] = {
+        "SUMMARY_BACKEND": "claude-cli",
+        "SUMMARY_ENABLED": True,
+        "SUMMARY_MODEL": "claude-haiku-4-5-20251001",
+        "SUMMARY_MAX_TOKENS": 1000,
+        "SUMMARY_CONCURRENCY": 4,
+        "SUMMARY_CLI_PATH": "claude",
+        "SUMMARY_CLI_TIMEOUT": 15.0,
+        "SUMMARY_OPENAI_BASE_URL": "https://example.test/v1",
+        "SUMMARY_OPENAI_API_KEY": "k",
+        "SUMMARY_OPENAI_MODEL": "gpt-4o-mini",
+        "SUMMARY_OPENAI_TIMEOUT": 15.0,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+class _FakeProc:
+    """Minimal stand-in for asyncio.subprocess.Process."""
+
+    def __init__(self, stdout: bytes = b"", returncode: int = 0) -> None:
+        self._stdout = stdout
+        self.returncode = returncode
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return self._stdout, b""
+
+    async def wait(self) -> int:
+        return self.returncode
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+
+class _SlowProc(_FakeProc):
+    """A process whose communicate() outlasts the configured timeout."""
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        await asyncio.sleep(10)
+        return b"", b""
+
+
+def _exec_returning(proc: _FakeProc) -> Callable[..., Awaitable[_FakeProc]]:
+    """Build a stand-in for asyncio.create_subprocess_exec that resolves to *proc*."""
+
+    async def _exec(*args: object, **kwargs: object) -> _FakeProc:
+        return proc
+
+    return _exec
+
+
+def _which_none(*args: object, **kwargs: object) -> None:
+    """Stand-in for shutil.which that reports the binary as missing."""
+    return None
+
+
+class TestClaudeCliBackend:
+    """Tests for the claude-cli subprocess backend (_run_cli)."""
+
+    @pytest.mark.asyncio
+    async def test_success_returns_stdout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("app.core.summary_service.get_settings", lambda: _fake_settings())
+        monkeypatch.setattr(
+            asyncio,
+            "create_subprocess_exec",
+            _exec_returning(_FakeProc(b"Short summary")),
+        )
+        svc = SummaryService()
+        svc.enabled = True
+        svc._backend = "claude-cli"
+        assert await svc._call_with_retry("prompt") == "Short summary"
+
+    @pytest.mark.asyncio
+    async def test_empty_stdout_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("app.core.summary_service.get_settings", lambda: _fake_settings())
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", _exec_returning(_FakeProc(b"")))
+        svc = SummaryService()
+        svc.enabled = True
+        svc._backend = "claude-cli"
+        assert await svc._call_with_retry("prompt", max_retries=0) is None
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "app.core.summary_service.get_settings",
+            lambda: _fake_settings(SUMMARY_CLI_TIMEOUT=0.01),
+        )
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", _exec_returning(_SlowProc()))
+        svc = SummaryService()
+        svc.enabled = True
+        svc._backend = "claude-cli"
+        assert await svc._call_with_retry("prompt", max_retries=0) is None
+
+    def test_missing_binary_disables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", _which_none)
+        monkeypatch.setattr("app.core.summary_service.get_settings", lambda: _fake_settings())
+        assert SummaryService().enabled is False
+
+
+class _FakeResponse:
+    """Stand-in for an httpx.Response."""
+
+    def __init__(self, payload: dict[str, object] | None = None) -> None:
+        # payload=None signals an HTTP error (raise_for_status raises).
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        if self._payload is None:
+            raise httpx.HTTPError("simulated server error")
+
+    def json(self) -> dict[str, object]:
+        return self._payload or {}
+
+
+class _FakeAsyncClient:
+    def __init__(self, response: _FakeResponse) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> "_FakeAsyncClient":
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    async def post(self, *args: object, **kwargs: object) -> _FakeResponse:
+        return self._response
+
+
+def _client_returning(client: _FakeAsyncClient) -> Callable[..., _FakeAsyncClient]:
+    """Build a stand-in for the httpx.AsyncClient constructor returning *client*."""
+
+    def _client(*args: object, **kwargs: object) -> _FakeAsyncClient:
+        return client
+
+    return _client
+
+
+class TestOpenAiBackend:
+    """Tests for the OpenAI-compatible httpx backend (_run_openai)."""
+
+    @pytest.mark.asyncio
+    async def test_success_parses_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("app.core.summary_service.get_settings", lambda: _fake_settings())
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            _client_returning(
+                _FakeAsyncClient(
+                    _FakeResponse({"choices": [{"message": {"content": "OpenAI summary"}}]})
+                )
+            ),
+        )
+        svc = SummaryService()
+        svc.enabled = True
+        svc._backend = "openai"
+        assert await svc._call_with_retry("prompt", max_retries=0) == "OpenAI summary"
+
+    @pytest.mark.asyncio
+    async def test_http_error_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("app.core.summary_service.get_settings", lambda: _fake_settings())
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            _client_returning(_FakeAsyncClient(_FakeResponse(None))),
+        )
+        svc = SummaryService()
+        svc.enabled = True
+        svc._backend = "openai"
+        assert await svc._call_with_retry("prompt", max_retries=0) is None
+
+    @pytest.mark.asyncio
+    async def test_empty_choices_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("app.core.summary_service.get_settings", lambda: _fake_settings())
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            _client_returning(_FakeAsyncClient(_FakeResponse({"choices": []}))),
+        )
+        svc = SummaryService()
+        svc.enabled = True
+        svc._backend = "openai"
+        assert await svc._call_with_retry("prompt", max_retries=0) is None
+
+    def test_unconfigured_disables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "app.core.summary_service.get_settings",
+            lambda: _fake_settings(
+                SUMMARY_BACKEND="openai", SUMMARY_OPENAI_BASE_URL="", SUMMARY_OPENAI_MODEL=""
+            ),
+        )
+        assert SummaryService().enabled is False

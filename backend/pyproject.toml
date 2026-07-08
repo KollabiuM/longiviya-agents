@@ -16,7 +16,6 @@ dependencies = [
     "aiosqlite>=0.22.1",
     "rich>=15.0.0",
     "greenlet>=3.5.0",
-    "anthropic>=0.97.0",
 ]
 
 [project.optional-dependencies]

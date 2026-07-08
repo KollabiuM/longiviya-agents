@@ -1,8 +1,12 @@
 """AI-powered summary generation using Claude Haiku."""
 
+import asyncio
 import logging
 import re
+import shutil
 from typing import Any
+
+import httpx
 
 from app.config import get_settings
 
@@ -59,36 +63,57 @@ class SummaryService:
     _MAPPED_AGENT_TYPES: frozenset[str] = frozenset(_AGENT_TYPE_NAMES.keys())
 
     def __init__(self) -> None:
-        """Initialize the summary service with OAuth token if available."""
+        """Initialize the summary service with the configured backend.
+
+        Backend is selected via ``SUMMARY_BACKEND``:
+
+        - ``claude-cli`` (default): spawn ``claude -p --bare`` subprocesses,
+          authenticating via the user's logged-in Claude subscription.
+        - ``openai``: call any OpenAI-compatible ``/chat/completions`` endpoint.
+        - ``disabled``: local fallback text only.
+        """
         settings = get_settings()
-        self.enabled = bool(settings.CLAUDE_CODE_OAUTH_TOKEN) and settings.SUMMARY_ENABLED
-        self.client: Any | None = None
+        self._backend = settings.SUMMARY_BACKEND.strip().lower()
         self.model = settings.SUMMARY_MODEL
+        self._cli_path = settings.SUMMARY_CLI_PATH
+        self._semaphore = asyncio.Semaphore(max(1, settings.SUMMARY_CONCURRENCY))
 
-        if self.enabled:
-            try:
-                from anthropic import AsyncAnthropic
-
-                self.client = AsyncAnthropic(auth_token=settings.CLAUDE_CODE_OAUTH_TOKEN)
+        if not settings.SUMMARY_ENABLED or self._backend == "disabled":
+            self.enabled = False
+            reason = (
+                "SUMMARY_ENABLED=False"
+                if not settings.SUMMARY_ENABLED
+                else "SUMMARY_BACKEND=disabled"
+            )
+            logger.info(f"Summary service disabled ({reason}) - using fallback summaries")
+        elif self._backend == "openai":
+            self.enabled = bool(settings.SUMMARY_OPENAI_BASE_URL and settings.SUMMARY_OPENAI_MODEL)
+            self.model = settings.SUMMARY_OPENAI_MODEL or self.model
+            if self.enabled:
                 logger.info("=" * 50)
-                logger.info("AI SUMMARIES ENABLED")
+                logger.info("AI SUMMARIES ENABLED (openai-compatible backend)")
+                logger.info(f"  Base URL: {settings.SUMMARY_OPENAI_BASE_URL}")
                 logger.info(f"  Model: {self.model}")
-                logger.info(f"  Max tokens: {settings.SUMMARY_MAX_TOKENS}")
                 logger.info("=" * 50)
-            except ImportError:
-                logger.warning("anthropic package not installed - summaries disabled")
-                self.enabled = False
-        else:
-            if not settings.SUMMARY_ENABLED:
-                logger.info("Summary service disabled via SUMMARY_ENABLED=False")
             else:
-                logger.info("CLAUDE_CODE_OAUTH_TOKEN not set - using fallback summaries")
+                logger.info(
+                    "OpenAI summary backend misconfigured (need BASE_URL + MODEL) - using fallback"
+                )
+        else:  # claude-cli (default)
+            self.enabled = bool(shutil.which(self._cli_path))
+            if self.enabled:
+                logger.info("=" * 50)
+                logger.info("AI SUMMARIES ENABLED (claude-cli backend)")
+                logger.info(f"  CLI: {self._cli_path}  Model: {self.model}")
+                logger.info("=" * 50)
+            else:
+                logger.info(f"claude CLI '{self._cli_path}' not found - using fallback summaries")
 
     async def summarize_agent_task(self, task_description: str) -> str:
         """Generate a short summary of a subagent's task."""
         fallback = self._extract_first_sentence(task_description, max_len=50)
 
-        if not self.enabled or not self.client:
+        if not self.enabled:
             return fallback
 
         desc = _sanitize_untrusted(
@@ -115,7 +140,7 @@ class SummaryService:
 
         fallback = self._extract_first_sentence(prompt, max_len=150)
 
-        if not self.enabled or not self.client:
+        if not self.enabled:
             return fallback
 
         desc = _sanitize_untrusted(prompt[:1500] if len(prompt) > 1500 else prompt)
@@ -142,7 +167,7 @@ class SummaryService:
         if agent_type and agent_type.strip().lower() in self._MAPPED_AGENT_TYPES:
             return fallback
 
-        if not self.enabled or not self.client:
+        if not self.enabled:
             return fallback
 
         desc = _sanitize_untrusted(description[:500] if len(description) > 500 else description)
@@ -430,7 +455,7 @@ class SummaryService:
         )
         fallback_result = keyword_match or bool(create_md_pattern)
 
-        if not self.enabled or not self.client:
+        if not self.enabled:
             return fallback_result
 
         truncated = _sanitize_untrusted(prompt[:1000] if len(prompt) > 1000 else prompt)
@@ -447,7 +472,7 @@ class SummaryService:
         """Generate a short summary of Claude's response."""
         fallback = self._extract_first_sentence(response_text, max_len=100)
 
-        if not self.enabled or not self.client:
+        if not self.enabled:
             return fallback
 
         text = _sanitize_untrusted(
@@ -479,39 +504,101 @@ class SummaryService:
         return text
 
     async def _call_with_retry(self, prompt: str, max_retries: int = 1) -> str | None:
-        """Call the API with retry on error, returning None on failure."""
-        if not self.client:
+        """Call the configured backend with retry on error, returning None on failure."""
+        if not self.enabled:
             return None
 
-        settings = get_settings()
+        runner = self._run_openai if self._backend == "openai" else self._run_cli
 
         for attempt in range(max_retries + 1):
             try:
-                response = await self.client.messages.create(
-                    model=self.model,
-                    max_tokens=settings.SUMMARY_MAX_TOKENS,
-                    system=_SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                content = response.content
-                if content and len(content) > 0:
-                    first_block = content[0]
-                    if hasattr(first_block, "text"):
-                        text = str(first_block.text).strip()
-                        if text:
-                            return text
-                        logger.debug("AI returned empty response, using fallback")
-                        return None
-                logger.debug("AI response had no content, using fallback")
-                return None
+                return await runner(prompt)
             except Exception as e:
+                detail = f"{type(e).__name__}: {e}"
                 if attempt < max_retries:
-                    logger.warning(f"Summary API error, retrying: {e}")
+                    logger.warning(f"Summary backend error, retrying: {detail}")
                 else:
-                    logger.debug(f"Summary API failed after retry, using fallback: {e}")
+                    logger.debug(f"Summary backend failed after retry, using fallback: {detail}")
                     return None
 
         return None
+
+    async def _run_cli(self, prompt: str) -> str | None:
+        """Generate a summary by invoking the claude CLI in headless mode.
+
+        ``--bare`` skips hooks/LSP/plugins so the call neither re-triggers the
+        claude-office hooks nor pays their startup cost. ``--no-session-persistence``
+        keeps the ephemeral call from writing a transcript file. A hard timeout
+        guarantees the subprocess cannot hang the event loop; on any failure the
+        exception propagates to ``_call_with_retry`` for retry / fallback.
+        """
+        settings = get_settings()
+        argv = [
+            self._cli_path,
+            "-p",
+            "--bare",
+            "--no-session-persistence",
+            "--model",
+            self.model,
+            "--system-prompt",
+            _SYSTEM_PROMPT,
+            "--output-format",
+            "text",
+        ]
+        argv.append(prompt)
+
+        async with self._semaphore:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, _stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=settings.SUMMARY_CLI_TIMEOUT
+                )
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"claude CLI exited with code {proc.returncode}")
+
+        text = stdout.decode("utf-8", errors="replace").strip() if stdout else ""
+        return text or None
+
+    async def _run_openai(self, prompt: str) -> str | None:
+        """Generate a summary via an OpenAI-compatible /chat/completions endpoint."""
+        settings = get_settings()
+        base_url = settings.SUMMARY_OPENAI_BASE_URL.rstrip("/")
+        headers: dict[str, str] = {}
+        if settings.SUMMARY_OPENAI_API_KEY:
+            headers["Authorization"] = f"Bearer {settings.SUMMARY_OPENAI_API_KEY}"
+        payload = {
+            "model": settings.SUMMARY_OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": settings.SUMMARY_MAX_TOKENS,
+        }
+
+        async with (
+            self._semaphore,
+            httpx.AsyncClient(timeout=settings.SUMMARY_OPENAI_TIMEOUT) as client,
+        ):
+            resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
+            resp.raise_for_status()
+
+        data: Any = resp.json()
+        choices: list[Any] = data.get("choices") or []
+        if not choices:
+            return None
+        message: dict[str, Any] = choices[0].get("message") or {}
+        content = message.get("content") or ""
+        text = str(content).strip()
+        return text or None
 
 
 _summary_service: SummaryService | None = None

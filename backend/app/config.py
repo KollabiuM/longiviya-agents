@@ -66,6 +66,24 @@ class Settings(BaseSettings):
     SUMMARY_ENABLED: bool = True
     SUMMARY_MAX_TOKENS: int = 1000
 
+    # Pluggable summary backend. ``claude-cli`` spawns ``claude -p --bare``
+    # subprocesses (auth via the user's logged-in Claude subscription);
+    # ``openai`` calls any OpenAI-compatible /chat/completions endpoint;
+    # ``disabled`` uses local fallback text only. The previous OAuth/SDK path
+    # was removed because Anthropic no longer permits OAuth for this API.
+    SUMMARY_BACKEND: str = "claude-cli"  # claude-cli | openai | disabled
+    SUMMARY_CONCURRENCY: int = 4  # shared cap on in-flight summary calls
+
+    # claude-cli backend
+    SUMMARY_CLI_PATH: str = "claude"
+    SUMMARY_CLI_TIMEOUT: float = 15.0
+
+    # OpenAI-compatible backend (OpenAI, OpenRouter, Ollama, LM Studio, vLLM, …)
+    SUMMARY_OPENAI_BASE_URL: str = ""  # e.g. https://api.openai.com/v1
+    SUMMARY_OPENAI_API_KEY: str = ""  # omitted from headers when empty (keyless local servers)
+    SUMMARY_OPENAI_MODEL: str = ""  # e.g. gpt-4o-mini
+    SUMMARY_OPENAI_TIMEOUT: float = 15.0
+
     CLAUDE_PATH_HOST: str = ""
     CLAUDE_PATH_CONTAINER: str = ""
 
