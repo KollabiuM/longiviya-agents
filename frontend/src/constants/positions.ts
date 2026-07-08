@@ -51,3 +51,16 @@ export const BOSS_RUG_POSITION = { x: 640, y: 940 };
 
 /** Trash can offset from boss desk position */
 export const TRASH_CAN_OFFSET = { x: 110, y: 65 };
+
+// ============================================================================
+// DESK GRID
+// ============================================================================
+
+/**
+ * Desk grid shape — keep in sync with backend `state_machine.py`
+ * `StateMachine.DESKS_PER_ROW` / `StateMachine.MIN_DESK_COUNT`.
+ * A shared cross-component source is intentionally out of scope; update both
+ * sides together when changing the desk grid.
+ */
+export const DESKS_PER_ROW = 4;
+export const MIN_DESK_COUNT = 8;

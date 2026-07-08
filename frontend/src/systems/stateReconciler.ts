@@ -21,6 +21,7 @@ import {
   getQueuePosition,
 } from "@/systems/queuePositions";
 import type { Agent, GameState, Position } from "@/types";
+import { MIN_DESK_COUNT } from "@/constants/positions";
 
 // ============================================================================
 // SPAWN-POLICY (pure) — the 4-way branch extracted from handleStateUpdate.
@@ -245,7 +246,7 @@ export function reconcileState(state: GameState, ctx: ReconcilerContext): void {
 
   // ---- Update office state ----
   store.setSessionId(state.sessionId);
-  store.setDeskCount(state.office.deskCount ?? 8);
+  store.setDeskCount(state.office.deskCount ?? MIN_DESK_COUNT);
   // NOTE: elevatorState is NOT synced from backend — it's controlled by the
   // frontend's agent state machine for smooth animations.
   store.setPhoneState(state.office.phoneState ?? "idle");

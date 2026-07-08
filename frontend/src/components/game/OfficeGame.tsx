@@ -64,6 +64,8 @@ import {
   PLANT_POSITION,
   BOSS_RUG_POSITION,
   TRASH_CAN_OFFSET,
+  DESKS_PER_ROW,
+  MIN_DESK_COUNT,
 } from "@/constants/positions";
 import {
   AgentSprite,
@@ -255,7 +257,10 @@ export function OfficeGame(): ReactNode {
 
   // Desk count
   const deskCount = useMemo(() => {
-    return Math.max(8, Math.ceil(agents.size / 4) * 4);
+    return Math.max(
+      MIN_DESK_COUNT,
+      Math.ceil(agents.size / DESKS_PER_ROW) * DESKS_PER_ROW,
+    );
   }, [agents.size]);
 
   // Desk positions for Y-sorted rendering

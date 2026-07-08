@@ -48,6 +48,9 @@ interface WhiteboardFrameProps {
   mode: WhiteboardMode;
 }
 
+/** Marker colors drawn in the whiteboard tray (red, green, blue). */
+const MARKER_COLORS = [0xef4444, 0x22c55e, 0x3b82f6];
+
 function WhiteboardFrame({
   children,
   onPointerDown,
@@ -81,8 +84,7 @@ function WhiteboardFrame({
     g.stroke({ width: 1, color: 0x757575 });
 
     // Markers
-    const markerColors = [0xef4444, 0x22c55e, 0x3b82f6];
-    markerColors.forEach((color, i) => {
+    MARKER_COLORS.forEach((color, i) => {
       g.roundRect(125 + i * 25, 197, 18, 12, 2);
       g.fill(color);
     });

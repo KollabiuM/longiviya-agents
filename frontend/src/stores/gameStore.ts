@@ -19,6 +19,7 @@ import type {
   EventDetail,
   ConversationEntry,
 } from "@/types";
+import { DESKS_PER_ROW, MIN_DESK_COUNT } from "@/constants/positions";
 
 // ============================================================================
 // TYPES
@@ -358,7 +359,7 @@ const initialState = {
 
   // Office
   sessionId: "None",
-  deskCount: 8,
+  deskCount: MIN_DESK_COUNT,
   elevatorState: "closed" as ElevatorState,
   phoneState: "idle" as PhoneState,
   contextUtilization: 0.0,
@@ -430,7 +431,7 @@ export const useGameStore = create<GameStore>()(
         // Update desk count if needed
         const newDeskCount = Math.max(
           state.deskCount,
-          Math.ceil((newAgents.size + 1) / 4) * 4,
+          Math.ceil((newAgents.size + 1) / DESKS_PER_ROW) * DESKS_PER_ROW,
         );
 
         return { agents: newAgents, deskCount: newDeskCount };
@@ -1046,7 +1047,7 @@ export const useGameStore = create<GameStore>()(
         departureQueue: [],
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
         sessionId: "None",
-        deskCount: 8,
+        deskCount: MIN_DESK_COUNT,
         elevatorState: "closed",
         phoneState: "idle",
         contextUtilization: 0.0,

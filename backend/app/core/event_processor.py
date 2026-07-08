@@ -79,6 +79,12 @@ logger = logging.getLogger(__name__)
 # Prefixes stripped from paths when deriving display names.
 _DISPLAY_NAME_STRIP_PREFIXES = ("repos", "projects", "src", "work", "code", "github")
 
+# Maximum number of history entries retained on a StateMachine. Keep in sync
+# with backend StateMachine.MAX_CONVERSATION_ENTRIES (the conversation-entry
+# cap) and frontend gameStore MAX_EVENT_LOG (the event-log cap) — those are
+# already named; this names the third `sm.history` cap site.
+MAX_HISTORY_ENTRIES = 500
+
 
 def _todos_unchanged(old_todos: list[TodoItem], new_todos: list[TodoItem]) -> bool:
     """Return True if two todo lists are semantically identical.
@@ -539,8 +545,8 @@ class EventProcessor:
             "detail": detail,
         }
         sm.history.append(event_dict)
-        if len(sm.history) > 500:
-            sm.history = sm.history[-500:]
+        if len(sm.history) > MAX_HISTORY_ENTRIES:
+            sm.history = sm.history[-MAX_HISTORY_ENTRIES:]
 
         # ------------------------------------------------------------------
         # SESSION_START – start task-file polling + beads polling
@@ -843,8 +849,8 @@ class EventProcessor:
             if skipped_count > 0:
                 logger.warning(f"Skipped {skipped_count} malformed events during restoration")
 
-            if len(sm.history) > 500:
-                sm.history = sm.history[-500:]
+            if len(sm.history) > MAX_HISTORY_ENTRIES:
+                sm.history = sm.history[-MAX_HISTORY_ENTRIES:]
 
             sm.todos = await load_tasks(session_id)
             logger.debug(f"Restored {len(sm.todos)} tasks for session {session_id}")

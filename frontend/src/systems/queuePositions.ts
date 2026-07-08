@@ -11,6 +11,7 @@
  */
 
 import { Position } from "@/types";
+import { DESKS_PER_ROW } from "@/constants/positions";
 
 // Boss desk positions (where agents stand IN FRONT of the desk)
 // Boss desk center at y:928 (grid-aligned 29*32)
@@ -225,7 +226,7 @@ export function calculateQueueSlots(
  * Grid-aligned: X at multiples of 32, row spacing 192 (6×32)
  */
 export function getDeskPosition(deskNum: number): Position {
-  const rowSize = 4;
+  const rowSize = DESKS_PER_ROW;
   const index = deskNum - 1;
   const row = Math.floor(index / rowSize);
   const col = index % rowSize;

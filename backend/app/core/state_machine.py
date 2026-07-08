@@ -520,6 +520,20 @@ class OfficePhase(Enum):
 # StateMachine
 # ---------------------------------------------------------------------------
 
+# Tool-name → thought-bubble icon mapping. Hoisted to module level so the dict
+# is built once at import rather than rebuilt on every PRE/POST_TOOL_USE event.
+_TOOL_ICONS: dict[str, str] = {
+    "Read": "📖",
+    "Write": "✍️",
+    "Edit": "📝",
+    "Bash": "💻",
+    "Glob": "🔍",
+    "Grep": "🔎",
+    "WebSearch": "🌐",
+    "WebFetch": "📥",
+    "Task": "🎯",
+}
+
 
 @dataclass
 class StateMachine:
@@ -534,6 +548,11 @@ class StateMachine:
     MAX_AGENTS = 8
     MAX_CONTEXT_TOKENS = 200_000
     MAX_CONVERSATION_ENTRIES = 500
+    # Desk grid shape — keep in sync with frontend/src/constants/positions.ts
+    # (DESKS_PER_ROW / MIN_DESK_COUNT). A shared cross-component source is
+    # intentionally out of scope; update both sides together when changing the grid.
+    DESKS_PER_ROW: int = 4
+    MIN_DESK_COUNT: int = 8
 
     phase: OfficePhase = OfficePhase.EMPTY
     boss_state: BossState = BossState.IDLE
@@ -608,7 +627,14 @@ class StateMachine:
             bubble=self.boss_bubble,
         )
 
-        desk_count = min(self.MAX_AGENTS, max(8, ((len(self.agents) + 3) // 4) * 4))
+        desk_count = min(
+            self.MAX_AGENTS,
+            max(
+                self.MIN_DESK_COUNT,
+                ((len(self.agents) + self.DESKS_PER_ROW - 1) // self.DESKS_PER_ROW)
+                * self.DESKS_PER_ROW,
+            ),
+        )
 
         agents_list: list[Agent] = list(self.agents.values())
 
@@ -718,20 +744,8 @@ class StateMachine:
         Returns:
             A BubbleContent with type THOUGHT, a short description, and an icon.
         """
-        tool_icons = {
-            "Read": "📖",
-            "Write": "✍️",
-            "Edit": "📝",
-            "Bash": "💻",
-            "Glob": "🔍",
-            "Grep": "🔎",
-            "WebSearch": "🌐",
-            "WebFetch": "📥",
-            "Task": "🎯",
-        }
-
         tool_name = event.data.tool_name or ""
-        icon = tool_icons.get(tool_name, "⚙️")
+        icon = _TOOL_ICONS.get(tool_name, "⚙️")
         tool_input = event.data.tool_input or {}
 
         text: str = tool_name
