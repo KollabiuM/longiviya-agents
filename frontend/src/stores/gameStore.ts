@@ -16,128 +16,48 @@ import type {
   GameState as BackendGameState,
   WhiteboardData,
   WhiteboardMode,
-  EventDetail,
   ConversationEntry,
 } from "@/types";
 import { DESKS_PER_ROW, MIN_DESK_COUNT } from "@/constants/positions";
 
 // ============================================================================
-// TYPES
+// SHARED STORE TYPES (ARC-005)
 // ============================================================================
+// Slice-shared types live in ./slices/types and are re-exported here so every
+// existing `import { ... } from "@/stores/gameStore"` consumer is unchanged.
+export type {
+  AgentPhase,
+  PathState,
+  BubbleState,
+  AgentAnimationState,
+  CompactionAnimationPhase,
+  BossAnimationState,
+  EventLogEntry,
+  ReplayFrame,
+} from "./slices/types";
+import type {
+  AgentPhase,
+  PathState,
+  BubbleState,
+  AgentAnimationState,
+  CompactionAnimationPhase,
+  BossAnimationState,
+  EventLogEntry,
+  ReplayFrame,
+} from "./slices/types";
 
-/**
- * Frontend-controlled agent phases for queue choreography.
- * These are distinct from backend AgentState which tracks work status.
- */
-export type AgentPhase =
-  | "idle" // At desk, working
-  | "arriving" // Just spawned, walking to queue
-  | "in_arrival_queue" // Waiting in arrival queue
-  | "walking_to_ready" // Moving to position 0 (ready to talk spot)
-  | "conversing" // At position 0, talking to boss
-  | "walking_to_boss" // Moving to boss desk slot
-  | "at_boss" // Brief pause at boss desk
-  | "walking_to_desk" // Moving from boss to assigned desk
-  | "departing" // Removed from backend, walking to queue
-  | "in_departure_queue" // Waiting in departure queue
-  | "walking_to_elevator" // Moving from boss to elevator
-  | "in_elevator"; // In elevator, about to be removed
-
-/**
- * Path state for an agent following waypoints.
- */
-export interface PathState {
-  waypoints: Position[];
-  currentIndex: number;
-  progress: number; // 0-1 along current segment
-}
-
-/**
- * Bubble state with queue for ensuring minimum display time.
- */
-export interface BubbleState {
-  content: BubbleContent | null;
-  displayStartTime: number | null;
-  queue: BubbleContent[];
-}
-
-/**
- * Complete animation state for an agent (frontend-owned).
- */
-export interface AgentAnimationState {
-  // Identity (from backend)
-  id: string;
-  name: string | null;
-  color: string;
-  number: number;
-  desk: number | null;
-  backendState: BackendAgentState;
-  currentTask: string | null;
-  characterType: string | null;
-  parentSessionId: string | null;
-  parentId: string | null;
-
-  // Phase tracking (frontend owned)
-  phase: AgentPhase;
-
-  // Position state (frontend owned)
-  currentPosition: Position;
-  targetPosition: Position;
-  path: PathState | null;
-
-  // Bubble state (frontend owned)
-  bubble: BubbleState;
-
-  // Queue metadata
-  queueType: "arrival" | "departure" | null;
-  queueIndex: number; // Position in queue (-1 = not in queue)
-
-  // Animation state
-  isTyping: boolean; // True when agent is actively using tools
-}
-
-/**
- * Compaction animation phases for the boss walking to and jumping on trash can.
- */
-export type CompactionAnimationPhase =
-  | "idle" // No animation
-  | "walking_to_trash" // Boss walking to trash can
-  | "jumping" // Boss jumping on trash can
-  | "walking_back"; // Boss returning to desk
-
-/**
- * Boss animation state.
- */
-export interface BossAnimationState {
-  backendState: BossState;
-  position: Position;
-  bubble: BubbleState;
-  inUseBy: "arrival" | "departure" | null;
-  currentTask: string | null;
-  isTyping: boolean; // True when boss is actively using tools (typing animation)
-}
-
-/**
- * Event log entry for display.
- */
-export type EventLogEntry = Omit<
-  NonNullable<WebSocketMessage["event"]>,
-  "timestamp"
-> & { timestamp: Date; detail?: EventDetail };
-
-/**
- * Replay frame for event replay.
- */
-export interface ReplayFrame {
-  event: NonNullable<WebSocketMessage["event"]>;
-  state: BackendGameState;
-}
+import { createDebugSlice, initialDebugState } from "./slices/debugSlice";
+import { createReplaySlice, initialReplayState } from "./slices/replaySlice";
+import {
+  createWhiteboardSlice,
+  initialWhiteboardState,
+} from "./slices/whiteboardSlice";
 
 // ============================================================================
 // STORE INTERFACE
 // ============================================================================
 
-interface GameStore {
+export interface GameStore {
   // ========== Agent State ==========
   agents: Map<string, AgentAnimationState>;
 
@@ -256,7 +176,7 @@ interface GameStore {
   conversation: ConversationEntry[];
   setConversation: (conversation: ConversationEntry[]) => void;
 
-  // Whiteboard actions
+  // Whiteboard actions (provided by whiteboardSlice)
   whiteboardData: WhiteboardData;
   whiteboardMode: WhiteboardMode;
   setWhiteboardData: (data: WhiteboardData) => void;
@@ -270,14 +190,14 @@ interface GameStore {
   replayEvents: ReplayFrame[];
   currentReplayIndex: number;
 
-  // Debug state
+  // Debug state (provided by debugSlice)
   debugMode: boolean;
   showPaths: boolean;
   showQueueSlots: boolean;
   showPhaseLabels: boolean;
   showObstacles: boolean;
 
-  // UI actions
+  // UI actions (replay setters provided by replaySlice)
   setConnected: (connected: boolean) => void;
   setReplaying: (replaying: boolean) => void;
   setReplaySpeed: (speed: number) => void;
@@ -302,58 +222,6 @@ interface GameStore {
 
 const BOSS_POSITION: Position = { x: 640, y: 900 }; // Desk center at y=960 (30*32)
 const MAX_EVENT_LOG = 500;
-const DEBUG_SETTINGS_KEY = "claude-office-debug-settings";
-const WHITEBOARD_MODE_COUNT = 12; // 0-11 modes
-
-// Initial whiteboard data
-const initialWhiteboardData: WhiteboardData = {
-  toolUsage: {},
-  taskCompletedCount: 0,
-  bugFixedCount: 0,
-  coffeeBreakCount: 0,
-  codeWrittenCount: 0,
-  recentErrorCount: 0,
-  recentSuccessCount: 0,
-  activityLevel: 0,
-  consecutiveSuccesses: 0,
-  lastIncidentTime: null,
-  agentLifespans: [],
-  newsItems: [],
-  coffeeCups: 0,
-  fileEdits: {},
-  backgroundTasks: [],
-};
-
-// Helper to load debug settings from localStorage
-interface DebugSettings {
-  debugMode: boolean;
-  showPaths: boolean;
-  showQueueSlots: boolean;
-  showPhaseLabels: boolean;
-  showObstacles: boolean;
-}
-
-function loadDebugSettings(): Partial<DebugSettings> {
-  if (typeof window === "undefined") return {};
-  try {
-    const stored = localStorage.getItem(DEBUG_SETTINGS_KEY);
-    if (stored) {
-      return JSON.parse(stored) as DebugSettings;
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return {};
-}
-
-function saveDebugSettings(settings: DebugSettings): void {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(DEBUG_SETTINGS_KEY, JSON.stringify(settings));
-  } catch {
-    // Ignore storage errors
-  }
-}
 
 // ============================================================================
 // INITIAL STATE
@@ -407,23 +275,11 @@ const initialState = {
   eventLog: [] as EventLogEntry[],
   conversation: [] as ConversationEntry[],
 
-  // Whiteboard
-  whiteboardData: initialWhiteboardData,
-  whiteboardMode: 0 as WhiteboardMode,
-
-  // UI
-  isConnected: false,
-  isReplaying: false,
-  replaySpeed: 1,
-  replayEvents: [] as ReplayFrame[],
-  currentReplayIndex: -1,
-
-  // Debug - will be overwritten by localStorage values if available
-  debugMode: false,
-  showPaths: false,
-  showQueueSlots: false,
-  showPhaseLabels: false,
-  showObstacles: false,
+  // Sliced concerns (initial values owned by each slice; composed here so the
+  // reset variants can spread a single `initialState` and preserve behavior).
+  ...initialWhiteboardState,
+  ...initialReplayState,
+  ...initialDebugState,
 };
 
 // ============================================================================
@@ -431,8 +287,13 @@ const initialState = {
 // ============================================================================
 
 export const useGameStore = create<GameStore>()(
-  subscribeWithSelector((set, get) => ({
+  subscribeWithSelector((set, get, api) => ({
     ...initialState,
+
+    // --- Sliced concerns (ARC-005): each provides its own state + actions ---
+    ...createWhiteboardSlice(set, get, api),
+    ...createReplaySlice(set, get, api),
+    ...createDebugSlice(set, get, api),
 
     // ========================================================================
     // AGENT ACTIONS
@@ -1039,86 +900,6 @@ export const useGameStore = create<GameStore>()(
     setConversation: (conversation) => set({ conversation }),
 
     // ========================================================================
-    // WHITEBOARD ACTIONS
-    // ========================================================================
-
-    setWhiteboardData: (whiteboardData) => set({ whiteboardData }),
-
-    setWhiteboardMode: (whiteboardMode) => set({ whiteboardMode }),
-
-    cycleWhiteboardMode: () =>
-      set((state) => ({
-        whiteboardMode: ((state.whiteboardMode + 1) %
-          WHITEBOARD_MODE_COUNT) as WhiteboardMode,
-      })),
-
-    // ========================================================================
-    // UI ACTIONS
-    // ========================================================================
-
-    setConnected: (isConnected) => set({ isConnected }),
-    setReplaying: (isReplaying) => set({ isReplaying }),
-    setReplaySpeed: (replaySpeed) => set({ replaySpeed }),
-    setReplayEvents: (replayEvents) => set({ replayEvents }),
-    setReplayIndex: (currentReplayIndex) => set({ currentReplayIndex }),
-
-    setDebugMode: (debugMode) => {
-      set({ debugMode });
-      const state = get();
-      saveDebugSettings({
-        debugMode,
-        showPaths: state.showPaths,
-        showQueueSlots: state.showQueueSlots,
-        showPhaseLabels: state.showPhaseLabels,
-        showObstacles: state.showObstacles,
-      });
-    },
-    toggleDebugOverlay: (overlay) => {
-      set((state) => {
-        let newState: Partial<DebugSettings>;
-        switch (overlay) {
-          case "paths":
-            newState = { showPaths: !state.showPaths };
-            break;
-          case "queueSlots":
-            newState = { showQueueSlots: !state.showQueueSlots };
-            break;
-          case "phaseLabels":
-            newState = { showPhaseLabels: !state.showPhaseLabels };
-            break;
-          case "obstacles":
-            newState = { showObstacles: !state.showObstacles };
-            break;
-          default:
-            return state;
-        }
-        // Save to localStorage after state update
-        const currentState = { ...state, ...newState };
-        saveDebugSettings({
-          debugMode: currentState.debugMode,
-          showPaths: currentState.showPaths,
-          showQueueSlots: currentState.showQueueSlots,
-          showPhaseLabels: currentState.showPhaseLabels,
-          showObstacles: currentState.showObstacles,
-        });
-        return newState;
-      });
-    },
-
-    loadPersistedDebugSettings: () => {
-      const persisted = loadDebugSettings();
-      if (Object.keys(persisted).length > 0) {
-        set({
-          debugMode: persisted.debugMode ?? false,
-          showPaths: persisted.showPaths ?? false,
-          showQueueSlots: persisted.showQueueSlots ?? false,
-          showPhaseLabels: persisted.showPhaseLabels ?? false,
-          showObstacles: persisted.showObstacles ?? false,
-        });
-      }
-    },
-
-    // ========================================================================
     // TOP-LEVEL ACTIONS
     // ========================================================================
 
@@ -1127,7 +908,7 @@ export const useGameStore = create<GameStore>()(
         ...initialState,
         agents: new Map(),
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
-        whiteboardData: { ...initialWhiteboardData },
+        whiteboardData: { ...initialWhiteboardState.whiteboardData },
         whiteboardMode: 0,
       }),
 
@@ -1136,7 +917,7 @@ export const useGameStore = create<GameStore>()(
         ...initialState,
         agents: new Map(),
         boss: { ...initialBossState, bubble: createEmptyBubbleState() },
-        whiteboardData: { ...initialWhiteboardData },
+        whiteboardData: { ...initialWhiteboardState.whiteboardData },
         whiteboardMode: 0,
         isReplaying: true,
       }),
@@ -1164,7 +945,7 @@ export const useGameStore = create<GameStore>()(
         todos: [],
         gitStatus: null,
         eventLog: [], // Clear event log for new session
-        whiteboardData: { ...initialWhiteboardData },
+        whiteboardData: { ...initialWhiteboardState.whiteboardData },
         // Keep whiteboardMode - user preference
         // Keep connection-related state
         isConnected: false,
