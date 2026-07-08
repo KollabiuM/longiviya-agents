@@ -14,7 +14,6 @@ import {
   type AgentPhase,
   type PathState,
 } from "@/stores/gameStore";
-import { agentMachineService } from "@/machines/agentMachineService";
 import { calculatePath, updateAgentObstacle } from "./pathfinding";
 import { collisionManager } from "./agentCollision";
 import type { Position } from "@/types";
@@ -30,6 +29,18 @@ const BUBBLE_DURATION_MS = 3000; // 3 seconds per bubble
 // ANIMATION SYSTEM CLASS
 // ============================================================================
 
+/**
+ * Port the animation tick uses to talk back to the agent-machine layer.
+ * Wired in one composition root (gameRuntime.ts) so AnimationSystem never
+ * imports agentMachineService at runtime — breaking the machines↔systems
+ * import cycle (ARC-017).
+ */
+export interface AnimationListener {
+  notifyArrival(agentId: string, phase: AgentPhase): void;
+  notifyBubbleComplete(entityId: string): void;
+  notifyBossAvailable(): void;
+}
+
 interface AnimationState {
   isRunning: boolean;
   lastTickTime: number;
@@ -42,6 +53,16 @@ class AnimationSystem {
     lastTickTime: 0,
     rafId: null,
   };
+
+  private listener: AnimationListener | null = null;
+
+  /**
+   * Wire the machine-layer listener. Called once from the composition root
+   * (gameRuntime.ts) so this module never imports agentMachineService at runtime.
+   */
+  setListener(listener: AnimationListener | null): void {
+    this.listener = listener;
+  }
 
   /**
    * Start the animation loop.
@@ -299,7 +320,7 @@ class AnimationSystem {
   }
 
   private handleArrival(agentId: string, phase: AgentPhase): void {
-    agentMachineService.notifyArrival(agentId, phase);
+    this.listener?.notifyArrival(agentId, phase);
   }
 
   // ==========================================================================
@@ -358,13 +379,13 @@ class AnimationSystem {
       const store = useGameStore.getState();
       for (const [agentId, agent] of store.agents) {
         if (agent.phase === "conversing") {
-          agentMachineService.notifyBubbleComplete(agentId);
+          this.listener?.notifyBubbleComplete(agentId);
           break;
         }
       }
     } else {
       // Notify specific agent
-      agentMachineService.notifyBubbleComplete(entityId);
+      this.listener?.notifyBubbleComplete(entityId);
     }
   }
 
@@ -425,7 +446,7 @@ class AnimationSystem {
         this.lastNotifiedAgentId !== frontId
       ) {
         this.lastNotifiedAgentId = frontId;
-        agentMachineService.notifyBossAvailable();
+        this.listener?.notifyBossAvailable();
         return;
       }
     }
@@ -442,7 +463,7 @@ class AnimationSystem {
         this.lastNotifiedAgentId !== frontId
       ) {
         this.lastNotifiedAgentId = frontId;
-        agentMachineService.notifyBossAvailable();
+        this.listener?.notifyBossAvailable();
       }
     }
   }

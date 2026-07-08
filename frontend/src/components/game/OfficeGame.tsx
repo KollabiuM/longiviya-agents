@@ -44,6 +44,7 @@ import {
   selectPrintReport,
 } from "@/stores/gameStore";
 import { useAnimationSystem } from "@/systems/animationSystem";
+import { wireGameRuntime, unwireGameRuntime } from "@/systems/gameRuntime";
 import { useCompactionAnimation } from "@/systems/compactionAnimation";
 import { useOfficeTextures } from "@/hooks/useOfficeTextures";
 import {
@@ -191,6 +192,14 @@ export function OfficeGame(): ReactNode {
 
   // Start animation system
   useAnimationSystem();
+
+  // Wire the animation tick's listener to the agent-machine service (ARC-017).
+  // Lives here rather than in useAnimationSystem so animationSystem never
+  // imports agentMachineService at runtime (breaks the machines↔systems cycle).
+  useEffect(() => {
+    wireGameRuntime();
+    return () => unwireGameRuntime();
+  }, []);
 
   // Cleanup on unmount (HMR or navigation)
   useEffect(() => {

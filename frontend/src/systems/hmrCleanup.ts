@@ -6,6 +6,7 @@
  */
 
 import { animationSystem } from "./animationSystem";
+import { unwireGameRuntime } from "./gameRuntime";
 import { collisionManager } from "./agentCollision";
 import { resetNavigationGrid } from "./navigationGrid";
 import { agentMachineService } from "@/machines/agentMachineService";
@@ -27,6 +28,7 @@ export function registerPixiApp(app: PixiApplication): void {
  */
 export function performFullCleanup(): void {
   // Stop animation system first to prevent stale updates
+  unwireGameRuntime();
   animationSystem.stop();
 
   // Clear collision tracking
@@ -59,6 +61,7 @@ export function performFullCleanup(): void {
  * Use this for soft resets (e.g., session change).
  */
 export function performSoftReset(): void {
+  unwireGameRuntime();
   animationSystem.stop();
   collisionManager.clear();
   resetNavigationGrid();

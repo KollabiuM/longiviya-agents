@@ -23,7 +23,10 @@ import {
   releaseElevatorPosition,
   ELEVATOR_DEPARTURE_POSITION,
 } from "@/systems/queuePositions";
-import { animationSystem } from "@/systems/animationSystem";
+import {
+  animationSystem,
+  type AnimationListener,
+} from "@/systems/animationSystem";
 import { QueueManager } from "./queueManager";
 import {
   getDeskPosition,
@@ -44,7 +47,7 @@ interface ManagedAgent {
 // SERVICE CLASS
 // ============================================================================
 
-class AgentMachineService {
+class AgentMachineService implements AnimationListener {
   private agents: Map<string, ManagedAgent> = new Map();
   private actions: AgentMachineActions;
   private queue = new QueueManager();
