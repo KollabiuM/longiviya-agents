@@ -4,6 +4,22 @@ All notable changes to Claude Office Visualizer are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Audit remediation — security hardening**: the auto-generated API key is no longer returned over HTTP by `GET /api/v1/status` (delivered to the launching user via the server console + a `?token=` launch URL the frontend reads into `sessionStorage`); `POST /sessions/{id}/focus` (terminal activation + clipboard write) now requires the key, closing a paste-jacking/CSRF vector; git invocations are hardened against hostile repos (`core.fsmonitor=false`, `core.hooksPath=/dev/null`, `GIT_CONFIG_GLOBAL=/dev/null`) with `project_root` validation; the Docker API binds to `127.0.0.1` only; and `LOG_RICH_TRACEBACKS` is now a setting (off in containers). The OpenCode plugin sends `X-API-Key` when `CLAUDE_OFFICE_API_KEY` is set. (Audit SEC-001..006.)
+- **Audit remediation — backend architecture & correctness**: blocking synchronous file I/O moved off the async event loop (`asyncio.to_thread`); the dual event dispatch collapsed to a single `EventType → enricher` table; `ConnectionManager` relocated to the domain layer and the DI seams (`get_manager()`/`get_event_processor()`) made functional; `EventData` converted to a discriminated union of family-specific models (wire format unchanged); the three pollers deduped via a `BasePoller[TState]` framework; `main.py` split into `api/middleware.py` + `db/migrate.py` + `api/routes/websockets.py`; per-session rate limiting; bounded growth (idle-session eviction, opt-in event retention, no-listener serialization skip, replay pagination); a hooks↔backend event-contract test; and `make checkall` now runs tests across all four components with a CI workflow on every PR. (Audit ARC-001/002/003/008..014/015/016/018/019/021..031.)
+- **Audit remediation — `httpx2` is load-bearing, not unused**: a prior cleanup removed `httpx2` from the backend dev deps, but it is the stub-only peer dependency Starlette's `TestClient` typing requires (the 0.21.0 release added it for exactly this); `uv lock` didn't purge it from the venv so the breakage was latent until a later `uv sync`. Restored with a documenting comment. (Audit ARC-022, corrected.)
+
+### Changed
+
+- **Audit remediation — code quality**: 76 frontend characterization tests pinning queue/pathfinding/agent-machine behavior; `useWebSocketEvents` decomposed into pure transport + domain modules (`WebSocketController`, `stateReconciler`'s `resolveSpawn`, `typingTracker`, `shouldShowToast`); the OpenCode plugin's session-tracking extracted into a tested `SessionTracker` class with a real ESLint config; the `StateMachine` alias plumbing removed; `gameStore` dequeue made atomic and magic numbers named as constants; the hooks installer read-modify-writes the config (preserving user edits); `VERSION`/`__version__` derived via `importlib.metadata`; and `make bump-version` automates the six manual version locations. +489 tests overall. (Audit QA-001/002/004..008/010..015, ARC-026/027/028.)
+
+### Added
+
+- **Audit remediation — documentation**: API authentication (`X-API-Key`) documented; the `SERVE_STATIC` gate, Command Center architecture, complete env-var tables, and a CI badge added; stale `summarize_tool_call` docs and broken links fixed; root working artifacts moved to `docs/archives/`. (Audit DOC-001..016.)
+
+See `AUDIT-REMEDIATION.md` for the full per-issue accounting. 60 of 69 audit findings resolved; the remaining 9 (frontend god-object refactors ARC-004/005/006/017 + QA-003/009, the ARC-020 remote-backend policy decision, and the opportunistic QA-016 canvas split) are deferred for focused follow-up — QA-001's characterization tests make that safer.
+
 ## [0.22.0] - 2026-06-26
 
 ### Added
