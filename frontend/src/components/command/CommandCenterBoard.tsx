@@ -6,8 +6,8 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { ZONE_BY_KEY, type ZoneKey } from "./layout";
 import type { CommandSummary } from "./useCommandCenterPeers";
 
-const W = 252;
-const H = 104;
+const W = 320;
+const H = 116;
 
 interface CommandCenterBoardProps {
   counts: Record<ZoneKey, number>;
@@ -46,7 +46,7 @@ export function CommandCenterBoard({
   const drawTodoBar = useCallback(
     (g: Graphics) => {
       g.clear();
-      const w = 150;
+      const w = 184;
       const h = 8;
       g.roundRect(0, 0, w, h, 4);
       g.fill({ color: 0xe2e8f0 });
@@ -67,7 +67,7 @@ export function CommandCenterBoard({
       <pixiGraphics draw={drawBoard} />
 
       {/* Title */}
-      <pixiContainer x={0} y={-H / 2 + 16} scale={0.5}>
+      <pixiContainer x={0} y={-H / 2 + 17} scale={0.5}>
         <pixiText
           text={`\u{1F4CB} ${t("commandCenter.board.allSessions")}`}
           anchor={{ x: 0.5, y: 0.5 }}
@@ -82,7 +82,7 @@ export function CommandCenterBoard({
       </pixiContainer>
 
       {/* Terminals + employees */}
-      <pixiContainer x={left} y={-H / 2 + 38} scale={0.5}>
+      <pixiContainer x={left} y={-H / 2 + 42} scale={0.5}>
         <pixiText
           text={`${t("commandCenter.board.terminals")}: ${summary.terminals}    ${t("commandCenter.board.employees")}: ${summary.subagents}`}
           anchor={{ x: 0, y: 0.5 }}
@@ -92,7 +92,7 @@ export function CommandCenterBoard({
       </pixiContainer>
 
       {/* Per-status counts in zone colors */}
-      <pixiContainer x={left} y={-H / 2 + 58} scale={0.5}>
+      <pixiContainer x={left} y={-H / 2 + 64} scale={0.5}>
         <pixiText
           text={`⚠ ${counts.needs_you ?? 0}`}
           anchor={{ x: 0, y: 0.5 }}
@@ -105,7 +105,7 @@ export function CommandCenterBoard({
           }}
         />
       </pixiContainer>
-      <pixiContainer x={left + 56} y={-H / 2 + 58} scale={0.5}>
+      <pixiContainer x={left + 68} y={-H / 2 + 64} scale={0.5}>
         <pixiText
           text={`\u{1F7E2} ${counts.working ?? 0}`}
           anchor={{ x: 0, y: 0.5 }}
@@ -118,7 +118,7 @@ export function CommandCenterBoard({
           }}
         />
       </pixiContainer>
-      <pixiContainer x={left + 112} y={-H / 2 + 58} scale={0.5}>
+      <pixiContainer x={left + 136} y={-H / 2 + 64} scale={0.5}>
         <pixiText
           text={`✅ ${counts.done ?? 0}`}
           anchor={{ x: 0, y: 0.5 }}
@@ -133,7 +133,7 @@ export function CommandCenterBoard({
       </pixiContainer>
 
       {/* Aggregate todo progress */}
-      <pixiContainer x={left} y={-H / 2 + 76} scale={0.5}>
+      <pixiContainer x={left} y={-H / 2 + 88} scale={0.5}>
         <pixiText
           text={`${t("commandCenter.board.todos")} ${summary.todoDone}/${summary.todoTotal}`}
           anchor={{ x: 0, y: 0.5 }}
@@ -141,7 +141,7 @@ export function CommandCenterBoard({
           style={{ fontFamily: "monospace", fontSize: 20, fill: 0x334155 }}
         />
       </pixiContainer>
-      <pixiContainer x={left + 44} y={-H / 2 + 80}>
+      <pixiContainer x={left + 70} y={-H / 2 + 84}>
         <pixiGraphics draw={drawTodoBar} />
       </pixiContainer>
     </pixiContainer>

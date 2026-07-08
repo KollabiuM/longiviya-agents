@@ -133,10 +133,10 @@ export function CommandCenterCanvas({
                   <CommandCenterZones counts={counts} overflow={overflow} />
                   <CommandCenterDecor textures={textures} />
                   {/* Top-wall combined board + clock */}
-                  <pixiContainer x={430} y={66}>
+                  <pixiContainer x={420} y={70}>
                     <CommandCenterBoard counts={counts} summary={summary} />
                   </pixiContainer>
-                  <pixiContainer x={690} y={64}>
+                  <pixiContainer x={690} y={70}>
                     <WallClock />
                   </pixiContainer>
                   <CommandCenterFurniture textures={textures} />
