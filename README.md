@@ -45,6 +45,12 @@ The application was built with [Next.js](https://nextjs.org/), [PixiJS](https://
 
 ## What's New
 
+### v0.24.0 (July 2026)
+
+- **⚠ Breaking — OpenCode plugin remote backend is now opt-in**: a non-localhost `CLAUDE_OFFICE_API_URL` is clamped to the local default unless `CLAUDE_OFFICE_ALLOW_REMOTE=1` is set (matching the Claude Code hooks; event payloads carry tool I/O and file paths). **If you point the plugin at a remote server, set `CLAUDE_OFFICE_ALLOW_REMOTE=1` or events silently post to localhost.**
+- **Pluggable summary backend**: summaries now come from `SUMMARY_BACKEND` = `claude-cli` (default), any `openai`-compatible endpoint, or `disabled` — `CLAUDE_CODE_OAUTH_TOKEN` no longer required.
+- **Performance & architecture**: per-frame agent writes batched into one store update per tick (header/sidebar/modals stop re-rendering at 60fps during movement); `gameStore` split into 9 Zustand slices; single-writer agent-state ownership retires the 3-second "stuck boss" watchdog. 67 of 69 audit findings resolved.
+
 ### v0.23.0 (July 2026)
 
 - **Audit remediation (60 findings)**: Full security hardening (API key no longer disclosed over HTTP — delivered via `?token=` launch URL, `focus`/clipboard gated behind the key, git invocation hardening against hostile repos, Docker bound to loopback), a real CI workflow running `make checkall` across all four components, and the entire backend structural chain consolidated (single event-dispatch table, `ConnectionManager` moved to the domain layer with functional DI seams, `EventData` discriminated union, `BasePoller` framework, `main.py` split into middleware/migrate/websockets, bounded growth with idle eviction + replay pagination). +489 tests. See `CHANGELOG.md` and `AUDIT-REMEDIATION.md`
@@ -221,6 +227,8 @@ make dev
 ### OpenCode Integration
 
 This fork adds support for [OpenCode](https://opencode.ai) as an alternative to Claude Code CLI. The `opencode-plugin/` directory contains a plugin that sends OpenCode lifecycle events to the same backend API.
+
+> **⚠ Breaking in v0.24.0:** a non-localhost `CLAUDE_OFFICE_API_URL` is now clamped to the local default unless `CLAUDE_OFFICE_ALLOW_REMOTE=1` is set (the Claude Code hooks always did this). If your backend runs on another host, set `CLAUDE_OFFICE_ALLOW_REMOTE=1` or events will silently post to localhost.
 
 #### Install
 
