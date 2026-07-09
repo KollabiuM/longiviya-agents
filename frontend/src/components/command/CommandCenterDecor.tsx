@@ -30,7 +30,7 @@ export function CommandCenterDecor({
           texture={t.wallOutlet}
           anchor={0.5}
           x={905}
-          y={TOP_WALL_H / 2 + 2}
+          y={TOP_WALL_H - 32}
           scale={0.045}
         />
       )}

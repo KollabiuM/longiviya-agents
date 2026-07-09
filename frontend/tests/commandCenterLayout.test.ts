@@ -69,4 +69,9 @@ describe("Command Center wall layout", () => {
     expect(decorSource).toContain("x={EXIT_DOOR_X + 120}");
     expect(decorSource).toContain("y={TOP_WALL_H - 50}");
   });
+
+  it("keeps the wall plug just above the baseboard", () => {
+    expect(decorSource).toContain("y={TOP_WALL_H - 32}");
+    expect(decorSource).not.toContain("y={TOP_WALL_H / 2 + 2}");
+  });
 });
