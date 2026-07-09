@@ -12,6 +12,8 @@ const BODY_W = 40;
 const BODY_H = 58;
 const HEAD_R = 13;
 const HEAD_CY = -BODY_H + HEAD_R + 2;
+const NAMEPLATE_Y = -BODY_H - 22;
+const TODO_PROGRESS_Y = NAMEPLATE_Y + 9;
 
 interface CommandCenterPeerProps {
   peer: CommandPeer;
@@ -158,7 +160,7 @@ function CommandCenterPeerComponent({
       </pixiContainer>
 
       {/* Project nameplate */}
-      <pixiContainer y={-BODY_H - 16} scale={0.5}>
+      <pixiContainer y={NAMEPLATE_Y} scale={0.5}>
         <pixiGraphics draw={drawPlate} />
         <pixiText
           text={shortLabel}
@@ -195,9 +197,8 @@ function CommandCenterPeerComponent({
 
       {/* Todo progress bar */}
       {peer.todoTotal > 0 && (
-        <pixiContainer y={12}>
-          <pixiGraphics draw={drawTodoBar} />
-          <pixiContainer x={0} y={8} scale={0.5}>
+        <pixiContainer y={TODO_PROGRESS_Y}>
+          <pixiContainer x={0} y={0} scale={0.5}>
             <pixiText
               text={`${peer.todoDone}/${peer.todoTotal}`}
               anchor={{ x: 0.5, y: 0 }}
@@ -208,6 +209,9 @@ function CommandCenterPeerComponent({
                 fill: 0x94a3b8,
               }}
             />
+          </pixiContainer>
+          <pixiContainer y={8}>
+            <pixiGraphics draw={drawTodoBar} />
           </pixiContainer>
         </pixiContainer>
       )}
