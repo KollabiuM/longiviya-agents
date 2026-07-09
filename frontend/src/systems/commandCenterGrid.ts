@@ -14,6 +14,8 @@ import {
   ZONES,
   MAX_SLOTS,
   TOP_WALL_H,
+  EXIT_DOOR_BASE_Y,
+  EXIT_DOOR_X,
   slotPosition,
 } from "@/components/command/layout";
 
@@ -51,10 +53,13 @@ class CommandCenterGrid implements PathGrid {
 
     for (const zone of ZONES) {
       if (zone.kind === "exit") {
-        // Elevator doorway (matches CommandCenterFurniture ExitDoor baseY).
-        const cx = zone.x + zone.w / 2;
-        const baseY = zone.y + 150;
-        this.mark(cx - 58, baseY - 130, cx + 58, baseY);
+        // Elevator doorway on the back wall.
+        this.mark(
+          EXIT_DOOR_X - 58,
+          EXIT_DOOR_BASE_Y - 130,
+          EXIT_DOOR_X + 58,
+          EXIT_DOOR_BASE_Y,
+        );
         continue;
       }
       // A furniture footprint just below each slot's standing spot.

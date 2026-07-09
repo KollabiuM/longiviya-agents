@@ -4,14 +4,12 @@ import { type ReactNode } from "react";
 import type { Texture } from "pixi.js";
 import { useExitStore, exitProgress } from "@/systems/exitAnimation";
 import { CommandCenterPeer } from "./CommandCenterPeer";
-import { ZONE_BY_KEY } from "./layout";
+import { EXIT_DOOR_BASE_Y, EXIT_DOOR_X } from "./layout";
 import type { CommandPeer } from "./useCommandCenterPeers";
 
-// The elevator doorway sits at the top-centre of the Ended column (see
-// CommandCenterFurniture ExitDoor: baseY = zone.y + 150).
-const ended = ZONE_BY_KEY.ended;
-const DOOR_X = ended.x + ended.w / 2;
-const DOOR_BASE_Y = ended.y + 150;
+// The elevator doorway sits on the back wall at the floor boundary.
+const DOOR_X = EXIT_DOOR_X;
+const DOOR_BASE_Y = EXIT_DOOR_BASE_Y;
 const START_Y = DOOR_BASE_Y + 90; // queue spot below the door
 const THRESHOLD_Y = DOOR_BASE_Y - 34; // doorway entrance
 const INSIDE_Y = DOOR_BASE_Y - 78; // stepped inside

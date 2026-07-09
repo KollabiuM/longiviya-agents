@@ -31,7 +31,7 @@ export interface ZoneDef {
 }
 
 /** Height of the decorated top wall strip. */
-export const TOP_WALL_H = 140;
+export const TOP_WALL_H = 250;
 /** Floor furniture strip begins here (below the desk grid). */
 export const FLOOR_DECOR_Y = CANVAS_HEIGHT - 96;
 
@@ -99,12 +99,16 @@ export const ZONE_BY_KEY: Record<ZoneKey, ZoneDef> = ZONES.reduce(
   {} as Record<ZoneKey, ZoneDef>,
 );
 
+/** Elevator/exit doorway sits on the back wall at the floor boundary. */
+export const EXIT_DOOR_BASE_Y = TOP_WALL_H;
+export const EXIT_DOOR_X = ZONE_BY_KEY.ended.x + ZONE_BY_KEY.ended.w / 2;
+
 // Workstation grid within a column: 2 sub-columns × 4 rows.
 const SLOT_COLS = 2;
 const HEADER_H = 44;
 const COL_PAD_X = 16;
 const SUB_COL_GAP = 152;
-const ROW_TOP = FLOOR_TOP + HEADER_H + 70; // first row's feet
+const ROW_TOP = FLOOR_TOP + HEADER_H + 90; // first row's feet
 const ROW_GAP = 168;
 
 /** Max visible workstations per column before collapsing to "+N more". */

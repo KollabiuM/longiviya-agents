@@ -4,7 +4,14 @@ import { memo, useCallback, type ReactNode } from "react";
 import { Graphics, type Texture } from "pixi.js";
 import type { OfficeTextures } from "@/hooks/useOfficeTextures";
 import { useExitStore, selectDoorOpen } from "@/systems/exitAnimation";
-import { ZONES, MAX_SLOTS, slotPosition, type ZoneDef } from "./layout";
+import {
+  ZONES,
+  MAX_SLOTS,
+  EXIT_DOOR_BASE_Y,
+  EXIT_DOOR_X,
+  slotPosition,
+  type ZoneDef,
+} from "./layout";
 
 // ============================================================================
 // DESK WORKSTATION (Needs-you / Working) — composed from real office sprites.
@@ -158,14 +165,12 @@ const Couch = memo(CouchComponent);
 // ============================================================================
 
 function ExitDoorComponent({
-  zone,
   textures: t,
 }: {
-  zone: ZoneDef;
   textures: OfficeTextures;
 }): ReactNode {
-  const cx = zone.x + zone.w / 2;
-  const baseY = zone.y + 150;
+  const cx = EXIT_DOOR_X;
+  const baseY = EXIT_DOOR_BASE_Y;
   // Open the doors while an agent is stepping out.
   const doorOpen = useExitStore(selectDoorOpen);
 
@@ -244,9 +249,7 @@ const ExitDoor = memo(ExitDoorComponent);
 
 function zoneFurniture(zone: ZoneDef, textures: OfficeTextures): ReactNode[] {
   if (zone.kind === "exit") {
-    return [
-      <ExitDoor key={`${zone.key}-exit`} zone={zone} textures={textures} />,
-    ];
+    return [<ExitDoor key={`${zone.key}-exit`} textures={textures} />];
   }
   const items: ReactNode[] = [];
   for (let slot = 0; slot < MAX_SLOTS; slot++) {

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { getCommandCenterGrid } from "@/systems/commandCenterGrid";
-import { ZONES, slotPosition, MAX_SLOTS } from "@/components/command/layout";
+import {
+  ZONES,
+  ZONE_BY_KEY,
+  TOP_WALL_H,
+  slotPosition,
+  MAX_SLOTS,
+} from "@/components/command/layout";
 import { findWorldPath } from "@/systems/astar";
 import { smoothPath } from "@/systems/pathSmoothing";
 import type { Position } from "@/types";
@@ -87,8 +93,8 @@ describe("Command Center pathfinding", () => {
     // through Command Center furniture (tiles walkable in the office but blocked
     // here). Smoothing with the CC grid must keep the path clear.
     const grid = getCommandCenterGrid();
-    const from: Position = { x: 16, y: 176 };
-    const to: Position = { x: 80, y: 368 };
+    const from: Position = { x: 16, y: TOP_WALL_H + 32 };
+    const to: Position = slotPosition(ZONE_BY_KEY.needs_you, 2);
     const raw = findWorldPath(from, to, "test-agent", grid);
     expect(raw.length).toBeGreaterThanOrEqual(3);
 
