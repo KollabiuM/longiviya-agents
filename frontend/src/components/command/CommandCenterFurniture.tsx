@@ -164,6 +164,9 @@ const Couch = memo(CouchComponent);
 // elevator sprites + a drawn EXIT sign.
 // ============================================================================
 
+const DOOR_PANEL_X = 50;
+const DOOR_PANEL_Y = -59;
+
 function ExitDoorComponent({
   textures: t,
 }: {
@@ -213,13 +216,22 @@ function ExitDoorComponent({
       )}
       {/* Closed doors — slide away (hidden) while someone is exiting */}
       {t.elevatorDoor && !doorOpen && (
-        <pixiSprite
-          texture={t.elevatorDoor}
-          anchor={{ x: 0.5, y: 1 }}
-          x={0}
-          y={0}
-          scale={0.2}
-        />
+        <>
+          <pixiSprite
+            texture={t.elevatorDoor}
+            anchor={{ x: 0, y: 0.5 }}
+            x={-DOOR_PANEL_X}
+            y={DOOR_PANEL_Y}
+            scale={{ x: 0.09, y: 0.183 }}
+          />
+          <pixiSprite
+            texture={t.elevatorDoor}
+            anchor={{ x: 1, y: 0.5 }}
+            x={DOOR_PANEL_X}
+            y={DOOR_PANEL_Y}
+            scale={{ x: 0.09, y: 0.183 }}
+          />
+        </>
       )}
       {/* EXIT sign above the doorway */}
       <pixiContainer y={-168}>

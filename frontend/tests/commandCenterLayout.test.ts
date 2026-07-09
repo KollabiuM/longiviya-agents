@@ -56,6 +56,17 @@ describe("Command Center wall layout", () => {
     expect(exitingPeerSource).not.toContain("zone.y + 150");
   });
 
+  it("draws the command center elevator as two door panels", () => {
+    expect(furnitureSource).toContain("const DOOR_PANEL_X = 50;");
+    expect(furnitureSource).toContain("const DOOR_PANEL_Y = -59;");
+    expect(furnitureSource).toContain("anchor={{ x: 0, y: 0.5 }}");
+    expect(furnitureSource).toContain("anchor={{ x: 1, y: 0.5 }}");
+    expect(furnitureSource).toContain("x={-DOOR_PANEL_X}");
+    expect(furnitureSource).toContain("x={DOOR_PANEL_X}");
+    expect(furnitureSource).toContain("scale={{ x: 0.09, y: 0.183 }}");
+    expect(furnitureSource).not.toContain("scale={0.2}");
+  });
+
   it("keeps only the requested floor decor", () => {
     const plantRefs = decorSource.match(/texture={t\.plant}/g);
 
