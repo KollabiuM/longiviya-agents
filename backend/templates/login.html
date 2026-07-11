@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>LONGIVIYA — Agent Office</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    :root {
+      --cream: #FAF6EF;
+      --chocolate: #2D1F17;
+      --gold: #C5A55A;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      font-family: "Montserrat", sans-serif;
+      font-weight: 400;
+      font-style: normal;
+      background-color: var(--cream);
+      color: var(--chocolate);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 24px;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 400px;
+      background-color: var(--cream);
+      border: 1px solid rgba(197, 165, 90, 0.25);
+      border-radius: 12px;
+      box-shadow: 0 18px 40px -24px rgba(45, 31, 23, 0.28);
+      padding: 48px 40px;
+    }
+
+    .brand {
+      font-weight: 600;
+      font-size: 28px;
+      letter-spacing: 0.18em;
+      color: var(--gold);
+      text-align: center;
+    }
+
+    .subtitle {
+      font-weight: 300;
+      font-size: 15px;
+      letter-spacing: 0.05em;
+      color: var(--chocolate);
+      text-align: center;
+      margin-top: 8px;
+    }
+
+    form {
+      margin-top: 36px;
+    }
+
+    label {
+      display: block;
+      font-weight: 500;
+      font-size: 13px;
+      letter-spacing: 0.02em;
+      color: var(--chocolate);
+      margin-bottom: 8px;
+    }
+
+    input[type="password"] {
+      width: 100%;
+      font-family: inherit;
+      font-weight: 400;
+      font-size: 15px;
+      color: var(--chocolate);
+      background-color: transparent;
+      border: 1px solid rgba(45, 31, 23, 0.18);
+      border-radius: 8px;
+      padding: 13px 15px;
+      transition: border-color 0.2s ease;
+    }
+
+    input[type="password"]::placeholder {
+      color: rgba(45, 31, 23, 0.4);
+      font-weight: 300;
+    }
+
+    input[type="password"]:focus {
+      outline: none;
+      border-color: var(--gold);
+    }
+
+    .error {
+      color: #B23A3A;
+      font-weight: 400;
+      font-size: 13px;
+      margin-top: 10px;
+    }
+
+    button {
+      width: 100%;
+      font-family: inherit;
+      font-weight: 500;
+      font-size: 15px;
+      letter-spacing: 0.04em;
+      color: var(--cream);
+      background-color: var(--chocolate);
+      border: none;
+      border-radius: 8px;
+      padding: 14px;
+      margin-top: 28px;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+    }
+
+    button:hover {
+      background-color: var(--gold);
+    }
+
+    button:focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">LONGIVIYA</div>
+    <div class="subtitle">Agent Office</div>
+    <form method="post" action="/login">
+      <label for="password">Пароль</label>
+      <input
+        type="password"
+        id="password"
+        name="password"
+        placeholder="Введите пароль"
+        autocomplete="current-password"
+        autofocus
+        required
+      />
+      <!-- ERROR -->
+      <button type="submit">Войти</button>
+    </form>
+  </main>
+</body>
+</html>

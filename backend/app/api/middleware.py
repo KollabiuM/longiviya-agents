@@ -11,9 +11,10 @@ inline version in ``main.py``.
 import hmac
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.api.auth import COOKIE_NAME, is_valid_session
 from app.config import get_settings
 
 # Resolved once at import time, mirroring the previous ``main.py`` pattern.
@@ -36,6 +37,10 @@ class LocalhostOnlyMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        # LNG-216: allow bypass when explicitly deployed behind a trusted proxy
+        # (nginx at agents.longiviya.com). Default keeps the loopback-only guard.
+        if settings.ALLOW_EXTERNAL_ACCESS:
+            return await call_next(request)
         client_host = request.client.host if request.client else None
         if client_host not in _LOCALHOST_HOSTS:
             return JSONResponse(
@@ -43,6 +48,37 @@ class LocalhostOnlyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Access denied: localhost only"},
             )
         return await call_next(request)
+
+
+# Paths reachable without a valid login cookie (LNG-216-LOGIN). The login page
+# and its POST handler must be open so the user can authenticate, and /health
+# stays public for K8s liveness probes. Everything else — the office UI, its
+# _next assets, docs and the API — is gated so nothing is visible before login.
+_LOGIN_EXEMPT_PATHS = frozenset({"/login", "/logout", "/health"})
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Gate every request behind the ``agent_session`` login cookie.
+
+    Enforced only when ``AGENT_ADMIN_PASSWORD`` is configured; when empty the
+    gate is a no-op so localhost development is unaffected. Unauthenticated
+    requests are redirected to ``/login`` (303) rather than shown any office
+    content. WebSocket handshakes never reach this HTTP middleware — their
+    Origin check in ``validate_websocket_origin`` is unchanged (see
+    app.api.auth for why cookie-gating WS is unnecessary here).
+    """
+
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        if not settings.AGENT_ADMIN_PASSWORD:
+            return await call_next(request)
+
+        if request.url.path in _LOGIN_EXEMPT_PATHS:
+            return await call_next(request)
+
+        if is_valid_session(request.cookies.get(COOKIE_NAME)):
+            return await call_next(request)
+
+        return RedirectResponse(url="/login", status_code=303)
 
 
 # Paths that do NOT require an API key (health checks, interactive docs).

@@ -46,6 +46,10 @@ RUN uv sync --no-dev --frozen
 # Copy backend source
 COPY backend/app ./app
 
+# Copy login page template (LNG-216-LOGIN). auth.py resolves it at
+# <backend_root>/templates/login.html, i.e. /app/templates/login.html.
+COPY backend/templates ./templates
+
 # Copy built frontend from stage 1
 COPY --from=frontend-builder /app/frontend/out ./static
 

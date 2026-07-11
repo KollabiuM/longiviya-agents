@@ -110,6 +110,21 @@ class Settings(BaseSettings):
     # Useful in development; disable for shared/production deployments (SEC-006).
     LOG_RICH_TRACEBACKS: bool = True
 
+    # LNG-216: When True, the loopback-only HTTP guard (LocalhostOnlyMiddleware)
+    # is disabled and BACKEND_CORS_ORIGINS is honored for WebSocket handshakes,
+    # so the app can run behind a trusted reverse proxy (K8s + nginx at
+    # agents.longiviya.com). Off by default — the tool stays localhost-only
+    # unless a deployment explicitly opts in.
+    ALLOW_EXTERNAL_ACCESS: bool = False
+
+    # LNG-216-LOGIN: password for the cookie-based login page that gates the
+    # Agent Office behind agents.longiviya.com. When empty (default), the auth
+    # gate is disabled so localhost development is unaffected. When set, every
+    # request outside the public allowlist must carry a valid ``agent_session``
+    # cookie (see app.api.auth / AuthMiddleware). Kept out of code — supplied
+    # via env var only, mirroring the previous nginx basic-auth password.
+    AGENT_ADMIN_PASSWORD: str = ""
+
     @property
     def effective_api_key(self) -> str:
         """Return the configured API key, or the per-launch auto-generated token."""

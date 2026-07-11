@@ -15,7 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from rich.logging import RichHandler
 from sqlalchemy import delete, select, update
 
-from app.api.middleware import ApiKeyMiddleware, LocalhostOnlyMiddleware
+from app.api import auth
+from app.api.middleware import ApiKeyMiddleware, AuthMiddleware, LocalhostOnlyMiddleware
 from app.api.routes import events, floors, preferences, sessions, websockets
 from app.config import get_settings
 from app.core.event_processor import EventProcessor, get_event_processor
@@ -184,6 +185,13 @@ app.add_middleware(
 
 app.add_middleware(LocalhostOnlyMiddleware)
 app.add_middleware(ApiKeyMiddleware)
+# LNG-216-LOGIN: outermost gate — redirects unauthenticated requests to /login
+# before any office content is served. No-op when AGENT_ADMIN_PASSWORD is unset.
+app.add_middleware(AuthMiddleware)
+
+# LNG-216-LOGIN: login/logout routes. Registered before the SERVE_STATIC
+# catch-all so ``GET /login`` isn't shadowed by the SPA fallback.
+app.include_router(auth.router)
 
 app.include_router(events.router, prefix=f"{settings.API_V1_STR}")
 app.include_router(floors.router, prefix=f"{settings.API_V1_STR}")

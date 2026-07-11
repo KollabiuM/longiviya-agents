@@ -1,0 +1,28 @@
+# Build context exclusions (LNG-216-LOGIN).
+# Primary purpose: keep Docker from walking heavy / non-shippable dirs. The
+# backend .venv in particular must be excluded — a stale NFS handle on it
+# otherwise hangs the build-context load indefinitely.
+
+# Python virtualenvs & caches
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# Node / frontend build artifacts (the image rebuilds these from source)
+**/node_modules
+frontend/.next
+frontend/out
+
+# VCS & tooling
+.git
+.github
+**/.DS_Store
+
+# Local data / logs / knowledge graph output
+*.log
+*.db
+backend/data
+graphify-out
